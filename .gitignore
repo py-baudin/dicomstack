@@ -1,5 +1,6 @@
 *.pyc
 Pipfile*
 
-test_data
+*egg-info/
+test_data/
 

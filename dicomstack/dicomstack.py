@@ -289,6 +289,7 @@ def list_files(dirpath):
 
 def load_dicom_dataset(dataset):
     """ load all dicom fields in dataset"""
+
     def _list_dicom_elements(dataset):
         elements, sequences = [], []
         for item in dataset:
