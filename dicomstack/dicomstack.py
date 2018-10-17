@@ -112,7 +112,7 @@ class DICOMStack(object):
                     cond = query[field].value.exists()
             else:
                 raise TypeErrorload_files
-            condition = cond if not condition else cond & condition
+            condition = cond if not condition else (cond & condition)
         return self.db.search(condition)
 
     def _filter(self, **filters):
@@ -120,18 +120,16 @@ class DICOMStack(object):
         query = tinydb.Query()
         condition = None
         for name, value in filters.items():
-            condition = None
-            for name, value in filters.items():
-                field, index = _parse_field(name)
-                cond = query[field].value
+            field, index = _parse_field(name)
+            cond = query[field].value
 
-                if index is not None:
-                    cond = cond[index]
-                if not isinstance(value, list):
-                    value = [value]
-                cond = cond.one_of(value)
+            if index is not None:
+                cond = cond[index]
+            if not isinstance(value, list):
+                value = [value]
+            cond = cond.one_of(value)
+            condition = cond if condition is None else (cond & condition)
 
-            condition = cond if not condition else cond & condition
         return self.db.search(condition)
 
     def _index(self, index):
