@@ -2,22 +2,29 @@
 # coding=utf-8
 
 import os
-import pydicom
-import re
+import math
 import glob
 import functools
 import zipfile
+import struct
 from io import BytesIO
+from operator import mul
+from functools import reduce
+import logging
 
+import pydicom
 import tinydb
 
-try:
-    import numpy
+# try:
+#     import numpy
+#
+#     HAS_NUMPY = True
+# except ImportError:
+#     # no pixel array support
+#     HAS_NUMPY = False
 
-    HAS_NUMPY = True
-except ImportError:
-    # no pixel array support
-    HAS_NUMPY = False
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DICOMStack(object):
@@ -61,17 +68,38 @@ class DICOMStack(object):
     def filenames(self):
         return [element["filename"] for element in self.elements]
 
+    def __len__(self):
+        """ number of DICOM images """
+        return len(self.db)
+
+    def __bool__(self):
+        """ return True if stack is not empty """
+        return len(self) > 0
+
+    def __contains__(self, field):
+        """ test if field is present """
+        return self.has_field(field)
+
+    def __iter__(self):
+        """ iterates dicom elements """
+        return iter(self.db)
+
     def __repr__(self):
         return "DICOMStack(%d)" % len(self.db)
 
     def __getitem__(self, fields):
-        # if len(fields) == 1 and isinstance(fields[0], int):
-        # return self.g(fields[0])
+        """ short for get_field_values or _index"""
+        if len(fields) == 1 and isinstance(fields[0], int):
+            # return item #i
+            return self._index(fields[0])
+
         if not isinstance(fields, tuple):
+            # return values of given fields
             fields = (fields,)
         return self.get_field_values(*fields)
 
     def __call__(self, **filters):
+        """ shortcut for filter_by_field """
         return self.filter_by_field(**filters)
 
     @classmethod
@@ -94,6 +122,113 @@ class DICOMStack(object):
         """ return a list a values for the given fields """
         elements = self._existing(*fields)
         return [_get_values(element, fields=fields) for element in elements]
+
+    def sort(self, *fields):
+        """ reindex database using field values """
+        elements = self._existing(*fields)
+        sort_key = functools.partial(_get_values, fields=fields)
+        sorted_elements = sorted(elements, key=sort_key)
+        for i, element in enumerate(sorted_elements):
+            element["index"] = i
+        return DICOMStack.from_elements(sorted_elements)
+
+    def as_volume(self, by=None, rescale=True):
+        """ as volume """
+        # if not HAS_NUMPY:
+        #     raise ImportError("numpy required")
+
+        # sort by position
+        if self.has_field("InStackPositionNumber"):
+            stack = self.sort("InStackPositionNumber")
+        elif self.has_field("SliceLocation"):
+            stack = self.sort("SliceLocation")
+        else:
+            raise NotImplementedError("Could not defined sorting method")
+
+        if not by:
+            # single non-indexed volume
+            return _make_volume(stack.elements, rescale=rescale)
+
+        # else: indexed volumes
+
+        # unique values
+        if isinstance(by, str):
+            by = [by]
+        indices = sorted(set(stack.get_field_values(*by)))
+
+        # index values for each volume
+        if len(by) == 1:
+            filters = [{by[0]: value} for value in indices]
+        else:
+            filters = [
+                dict((field, value) for field, value in zip(by, values))
+                for values in indices
+            ]
+
+        # create volumes
+        volumes = []
+        for filter in filters:
+            substack = stack.filter_by_field(**filter)
+            volumes.append(_make_volume(substack.elements, rescale=rescale))
+        return indices, volumes
+
+    def load_files(self, filenames):
+        """ load filenames """
+
+        filenames = sorted(set(os.path.normpath(f) for f in filenames))
+        for filename in filenames:
+            zip_path = get_zip_path(filename)
+            if zip_path:
+                self.load_zipfile(filename)
+                continue
+
+            elif not pydicom.misc.is_dicom(filename):
+                # if not DICOM
+                self.non_dicom.append(filename)
+                continue
+
+            dicom_obj = pydicom.dcmread(filename)
+            frames = load_dicom_frames(dicom_obj)
+            for frame in frames:
+                frame["filename"] = filename
+                frame["index"] = len(self.db)
+                self.db.insert(frame)
+
+    def load_zipfile(self, filename):
+        """ load files in zipfile"""
+        zip_path = get_zip_path(filename)
+        assert zipfile.is_zipfile(zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for zfile in zf.filelist:
+
+                if zfile.filename.endswith("/"):
+                    # is a directory: skip
+                    continue
+                zfilename = os.path.normpath(zfile.filename)
+                full_zfilename = os.path.join(zip_path, zfilename)
+                if not filename in full_zfilename:
+                    continue
+
+                # read file
+                rawfile = zf.read(zfile)
+                dicom_bytes = BytesIO(rawfile)
+
+                try:
+                    dicom_obj = pydicom.read_file(dicom_bytes)
+                except IOError:
+                    self.non_dicom.append(zfilename)
+
+                frames = load_dicom_frames(dicom_obj)
+                for frame in frames:
+                    frame["filename"] = full_zfilename
+                    frame["index"] = len(self.db)
+                    self.db.insert(frame)
+
+    def has_field(self, field):
+        """ check whether a field is present """
+        query = tinydb.Query()
+        cond = query[field].exists()
+        return bool(self.db.search(cond))
 
     def _existing(self, *items):
         """ return elements with existing values"""
@@ -137,108 +272,6 @@ class DICOMStack(object):
         query = tinydb.Query()
         return self.db.get(query.index == index)
 
-    def sort(self, *fields):
-        """ reindex database using field values """
-        elements = self._existing(*fields)
-        sort_key = functools.partial(_get_values, fields=fields)
-        sorted_elements = sorted(elements, key=sort_key)
-        for i, element in enumerate(sorted_elements):
-            element["index"] = i
-        return DICOMStack.from_elements(sorted_elements)
-
-    def as_volume(self, by=None, rescale=True):
-        """ as volume """
-        assert HAS_NUMPY
-
-        # sort by position
-        stack = self.sort("SliceLocation")
-
-        vols = []
-        if not by:
-            for element in stack.elements:
-                slope, intercept = 1, 0
-                if rescale:
-                    slope = element.get("RescaleSlope", {}).get("value", 1)
-                    intercept = element.get("RescaleSlope", {}).get("value", 0)
-                vols.append(element["array"].T * slope + intercept)
-            return numpy.asarray(vols).T
-
-        # unique values
-        if isinstance(by, str):
-            by = [by]
-        unique = sorted(set(stack.get_field_values(*by)))
-        if len(by) == 1:
-            allfilters = [{by[0]: value} for value in unique]
-        else:
-            allfilters = [
-                dict((field, value) for field, value in zip(by, values))
-                for values in unique
-            ]
-        for filters in allfilters:
-            vols_ = []
-            for element in stack.filter_by_field(**filters).elements:
-                slope, intercept = 1, 0
-                if rescale:
-                    slope = element.get("RescaleSlope", {}).get("value", 1)
-                    intercept = element.get("RescaleSlope", {}).get("value", 0)
-                vols_.append(element["array"].T * slope + intercept)
-            vols.append(numpy.asarray(vols_).T)
-
-        return unique, vols
-
-    # def geometry(self):
-    #     """ return dict of geometrical properties """
-    #    TODO
-
-    def load_files(self, filenames):
-        """ load filenames """
-
-        filenames = sorted(set(os.path.normpath(f) for f in filenames))
-        for filename in filenames:
-            zip_path = get_zip_path(filename)
-            if zip_path:
-                self.load_zipfile(filename)
-                continue
-
-            elif not pydicom.misc.is_dicom(filename):
-                # if not DICOM
-                self.non_dicom.append(filename)
-                continue
-
-            dicom_obj = pydicom.dcmread(filename)
-            dicom_dict = load_dicom_dataset(dicom_obj)
-            dicom_dict["filename"] = filename
-            dicom_dict["index"] = len(self.db)
-            self.db.insert(dicom_dict)
-
-    def load_zipfile(self, filename):
-        """ load files in zipfile"""
-        zip_path = get_zip_path(filename)
-        assert zipfile.is_zipfile(zip_path)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for zfile in zf.filelist:
-
-                if zfile.filename.endswith("/"):
-                    # is a directory: skip
-                    continue
-                zfilename = os.path.normpath(zfile.filename)
-                full_zfilename = os.path.join(zip_path, zfilename)
-                if not filename in full_zfilename:
-                    continue
-
-                # read file
-                rawfile = zf.read(zfile)
-                dicom_bytes = BytesIO(rawfile)
-
-                try:
-                    dicom_obj = pydicom.read_file(dicom_bytes)
-                except IOError:
-                    self.non_dicom.append(zfilename)
-
-                dicom_dict = load_dicom_dataset(dicom_obj)
-                dicom_dict["filename"] = full_zfilename
-                dicom_dict["index"] = len(self.db)
-                self.db.insert(dicom_dict)
 
 
 def get_zip_path(path):
@@ -248,23 +281,27 @@ def get_zip_path(path):
     return path[: path.find(".zip") + 4]
 
 
-# parse: <FIELD_NAME>_<NUM>
-RE_PARSE_FIELD = re.compile(r"([a-zA-Z]+)(?:_(\d+))?")
+def _parse_field(string):
+    """ parse string with optional index suffix
+        syntax: "txt" or "txt_num"
+    """
+    split = string.split("_")
+    try:
+        field = split[0]
+        assert field.isalpha()
+    except AssertionError:
+        raise ValueError('Invalid field name in: "%s"' % string)
 
+    try:
+        index = None if len(split) == 1 else int(split[1])
+    except TypeError:
+        raise ValueError('Cannot parse index in: "%s"' % string)
 
-def _parse_field(name):
-    """ parse field name with index"""
-    match = RE_PARSE_FIELD.match(name)
-    if not match:
-        raise ValueError('Cannot parse field: "%s"' % name)
-    field, index = match.groups()
-    if index:
-        return field, int(index)
-    return field, None
+    return field, index
 
 
 def _get_values(element, fields):
-    """ get element value"""
+    """ get DICOM element value """
     values = []
     for name in fields:
         field, index = _parse_field(name)
@@ -276,6 +313,68 @@ def _get_values(element, fields):
         return values[0]
     return tuple(values)
 
+def _make_volume(frames, rescale=True):
+    """ return volume from a sequence of frames"""
+
+    # find geometry
+    nframe = len(frames)
+    first = frames[0]
+    last = frames[-1]
+
+    origin = first["ImagePositionPatient"]["value"]
+    end = last["ImagePositionPatient"]["value"]
+    ax1 = first["ImageOrientationPatient"]["value"][:3]
+    ax2 = first["ImageOrientationPatient"]["value"][3:]
+    vec3 = [b - a for a, b in zip(origin, end)]
+    norm3 = math.sqrt(sum(value**2 for value in vec3))
+    if nframe == 1:
+        ax3 = 1
+        spacing3 = 1
+    else:
+        ax3 =  tuple(value / norm3 for value in vec3)
+        spacing3 = [value / (nframe - 1) for value in vec3]
+    axes = (ax1, ax2, ax3)
+    spacing = first["PixelSpacing"]["value"] + [spacing3]
+
+    shape = (first["Rows"]["value"], first["Columns"]["value"], nframe)
+    header = {
+        "origin": tuple(origin),
+        "spacing": tuple(spacing),
+        "axes": tuple(axes),
+    }
+
+    # make volume
+    pixels = []
+    for frame in frames:
+        slope, intercept = 1, 0
+        if rescale:
+            slope = frame.get("RescaleSlope", {}).get("value", 1)
+            intercept = frame.get("RescaleSlope", {}).get("value", 0)
+        pixels.extend([value * slope + intercept for value in frame["pixels"]])
+    return Volume(header, shape, pixels)
+
+class Volume(list):
+    """ simple 3d array class with meta data in header """
+    def __init__(self, header, shape, values):
+        assert "spacing" in header
+        assert "origin" in header
+        assert "axes" in header
+        self.header = dict(header)
+        self.shape = tuple(shape)
+        self.size = reduce(mul, self.shape)
+
+        # reshape values
+        assert len(values) == self.size
+
+        volume = []
+        for i in range(shape[0]):
+            volume.append([])
+            for j in range(shape[1]):
+                volume[i].append([])
+                for k in range(shape[2]):
+                    volume[i][j].append(values[k * shape[0] * shape[1] + j * shape[0] + i])
+        super().__init__(volume)
+
 
 def list_files(dirpath):
     """ list all files in dirpath and its sub folders """
@@ -285,36 +384,60 @@ def list_files(dirpath):
     return all_files
 
 
-def load_dicom_dataset(dataset):
+def load_dicom_frames(dataset):
     """ load all dicom fields in dataset"""
 
-    def _list_dicom_elements(dataset):
+    def _list_dicom_elements(dataset, root=False):
         elements, sequences = [], []
+        frame_items = None
         for item in dataset:
-
             if item.keyword == "PixelData":
                 # skip
                 continue
+            elif item.keyword == "PerFrameFunctionalGroupsSequence":
+                # multi-frame DICOM
+                frame_items = item
+            elif item.VR == "SQ":
+                # other sequences
+                sequences.append(item)
+            else:
+                elements.append(item)
 
-            target = sequences if item.VR == "SQ" else elements
-            target.append(item)
-
+        # flatten sequences
         for sequence in sequences:
-            for subdataset in sequence:
-                elements.extend(_list_dicom_elements(subdataset))
-        return elements
+            for item in sequence:
+                elements.extend(_list_dicom_elements(item))
 
-    elements = _list_dicom_elements(dataset)
+        if not root:
+            return elements
+
+        # else: solve frames (root level only)
+        if not frame_items:
+            return [elements]
+        frames = []
+        for item in frame_items:
+            frame = list(elements) # copy elements
+            frame.extend(_list_dicom_elements(item))
+            frames.append(frame)
+        return frames
+
+    raw_frames = _list_dicom_elements(dataset, root=True)
 
     def _get_element_info(element):
         def _cast_element_value(value):
             if isinstance(value, pydicom.multival.MultiValue):
+                # if value is an array
                 return [_cast_element_value(v) for v in value]
             elif isinstance(value, pydicom.valuerep.DSfloat):
+                # if value is defined as float
                 if value.is_integer():
                     return int(value)
                 return value.real
-            return str(value)
+            # else try force casting to int
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return str(value)
 
         return {
             "name": element.name,
@@ -322,10 +445,25 @@ def load_dicom_dataset(dataset):
             "value": _cast_element_value(element.value),
         }
 
-    dicom_dict = dict(
-        (element.keyword, _get_element_info(element)) for element in elements
-    )
-    if HAS_NUMPY:
-        dicom_dict["array"] = dataset.pixel_array
+    # pixel data
+    pixels = None
+    if "PixelData" in dataset:
+        # unsigned short
+        size = len(dataset.PixelData) // 2
+        pixels = struct.unpack("H" * size, dataset.PixelData)
 
-    return dicom_dict
+    # put frame into dicts
+    frames = []
+    for i, items in enumerate(raw_frames):
+        frame = dict(
+            (element.keyword, _get_element_info(element)) for element in items
+        )
+        if pixels:
+            rows = frame["Rows"]["value"]
+            cols = frame["Columns"]["value"]
+            size = rows * cols
+            frame["pixels"] = pixels[size * i : size * (i + 1)]
+            # frame["pixels"] = [pixels[offset : offset + j * rows] for j in range(cols)]
+
+        frames.append(frame)
+    return frames

@@ -6,10 +6,8 @@ with open("dicomstack/version.py") as version_file:
 setup(
     name="dicomstack",
     version=__version__,
-
     packages=find_packages(),
-    install_requires=['pydicom>=1.0', 'tinydb>=3.11'],
-
+    install_requires=["pydicom>=1.0", "tinydb>=3.11"],
     # metadata for upload to PyPI
     author="Pierre-Yves Baudin",
     author_email="py.baudin@cris-nmr.com",
