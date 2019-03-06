@@ -385,7 +385,7 @@ if HAS_NUMPY:
             ax3 = tuple(value / norm3 for value in vec3)
             spacing3 = norm3 / (nframe - 1)
         axes = (ax1, ax2, ax3)
-        spacing = first["PixelSpacing"]["value"] + [spacing3]
+        spacing = first["PixelSpacing"]["value"] + (spacing3,)
 
         info = {"origin": tuple(origin), "spacing": tuple(spacing), "axes": tuple(axes)}
 
@@ -453,7 +453,7 @@ def load_dicom_frames(dataset):
         def _cast_element_value(value):
             if isinstance(value, pydicom.multival.MultiValue):
                 # if value is an array
-                return [_cast_element_value(v) for v in value]
+                return tuple([_cast_element_value(v) for v in value])
             elif isinstance(value, pydicom.valuerep.DSfloat):
                 # if value is defined as float
                 if value.is_integer():

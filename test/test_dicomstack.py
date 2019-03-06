@@ -89,7 +89,7 @@ def test_dicomstack_class():
     assert "axes" in volume.info
     spacing = stack[0]["PixelSpacing"]["value"]
     origin = tuple(stack[0]["ImagePositionPatient"]["value"])
-    assert volume.info["spacing"] == tuple(spacing + [1])
+    assert volume.info["spacing"] == tuple(spacing + (1,))
     assert volume.info["axes"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.info["origin"] == origin
 
@@ -122,5 +122,5 @@ def test_dicomstack_class():
     spacing = stack[0]["PixelSpacing"]["value"]
     slice_spacing = stack[0]["SpacingBetweenSlices"]["value"]
     origin = tuple(stack[0]["ImagePositionPatient"]["value"])
-    assert np.all(np.isclose(volume.info["spacing"], spacing + [slice_spacing]))
+    assert np.all(np.isclose(volume.info["spacing"], spacing + (slice_spacing,)))
     assert volume.info["origin"] == origin
