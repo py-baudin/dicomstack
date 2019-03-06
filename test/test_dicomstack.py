@@ -7,7 +7,6 @@ import tempfile
 import pytest
 
 import numpy as np
-import pydicom
 
 from os.path import dirname, join
 from dicomstack import dicomstack
@@ -39,15 +38,6 @@ def test_get_zip_path():
     assert dicomstack.get_zip_path(join("some", "zipped.zip", "path")) == join(
         "some", "zipped.zip"
     )
-
-
-# def test_load_dicom_frames():
-#     """ test dicom loader """
-#     path = join(DATA_DIR, "ingenia_multiecho_enhanced", "IM_0016")
-#     dicom_obj = pydicom.dcmread(path)
-#     dicomdict = dicomstack.load_dicom_dataset(dicom_obj)
-#     1/0
-
 
 def test_dicomstack_class():
     """ test dicomstack class """

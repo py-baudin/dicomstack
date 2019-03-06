@@ -15,13 +15,13 @@ import logging
 import pydicom
 import tinydb
 
-# try:
-#     import numpy
-#
-#     HAS_NUMPY = True
-# except ImportError:
-#     # no pixel array support
-#     HAS_NUMPY = False
+try:
+    import numpy
+
+    HAS_NUMPY = True
+except ImportError:
+    # no pixel array support
+    HAS_NUMPY = False
 
 
 LOGGER = logging.getLogger(__name__)
@@ -134,8 +134,8 @@ class DICOMStack(object):
 
     def as_volume(self, by=None, rescale=True):
         """ as volume """
-        # if not HAS_NUMPY:
-        #     raise ImportError("numpy required")
+        if not HAS_NUMPY:
+            raise ImportError("numpy required")
 
         # sort by position
         if self.has_field("InStackPositionNumber"):
@@ -313,67 +313,89 @@ def _get_values(element, fields):
         return values[0]
     return tuple(values)
 
-def _make_volume(frames, rescale=True):
-    """ return volume from a sequence of frames"""
+# class Volume(list):
+#     """ simple 3d array class with meta data in header """
+#     def __init__(self, header, shape, values):
+#         assert "spacing" in header
+#         assert "origin" in header
+#         assert "axes" in header
+#         self.header = dict(header)
+#         self.shape = tuple(shape)
+#         self.size = reduce(mul, self.shape)
+#
+#         # reshape values
+#         assert len(values) == self.size
+#
+#         volume = []
+#         for i in range(shape[0]):
+#             volume.append([])
+#             for j in range(shape[1]):
+#                 volume[i].append([])
+#                 for k in range(shape[2]):
+#                     volume[i][j].append(values[k * shape[0] * shape[1] + j * shape[0] + i])
+#         super().__init__(volume)
 
-    # find geometry
-    nframe = len(frames)
-    first = frames[0]
-    last = frames[-1]
+if HAS_NUMPY:
 
-    origin = first["ImagePositionPatient"]["value"]
-    end = last["ImagePositionPatient"]["value"]
-    ax1 = first["ImageOrientationPatient"]["value"][:3]
-    ax2 = first["ImageOrientationPatient"]["value"][3:]
-    vec3 = [b - a for a, b in zip(origin, end)]
-    norm3 = math.sqrt(sum(value**2 for value in vec3))
-    if nframe == 1:
-        ax3 = 1
-        spacing3 = 1
-    else:
-        ax3 =  tuple(value / norm3 for value in vec3)
-        spacing3 = [value / (nframe - 1) for value in vec3]
-    axes = (ax1, ax2, ax3)
-    spacing = first["PixelSpacing"]["value"] + [spacing3]
+    class Volume(numpy.ndarray):
+        """ simple layer over numpy ndarray to add attribute: volume.info
+        """
 
-    shape = (first["Rows"]["value"], first["Columns"]["value"], nframe)
-    header = {
-        "origin": tuple(origin),
-        "spacing": tuple(spacing),
-        "axes": tuple(axes),
-    }
+        def __new__(cls, input_array, info):
+            """ create Volume object """
+            # copy the data
+            obj = numpy.asarray(input_array).view(cls)
+            obj.info = info
+            return obj
 
-    # make volume
-    pixels = []
-    for frame in frames:
-        slope, intercept = 1, 0
-        if rescale:
-            slope = frame.get("RescaleSlope", {}).get("value", 1)
-            intercept = frame.get("RescaleSlope", {}).get("value", 0)
-        pixels.extend([value * slope + intercept for value in frame["pixels"]])
-    return Volume(header, shape, pixels)
+        def __array_finalize__(self, obj):
+            if obj is None:
+                return
+            self.info = getattr(obj, 'info', {})
 
-class Volume(list):
-    """ simple 3d array class with meta data in header """
-    def __init__(self, header, shape, values):
-        assert "spacing" in header
-        assert "origin" in header
-        assert "axes" in header
-        self.header = dict(header)
-        self.shape = tuple(shape)
-        self.size = reduce(mul, self.shape)
+        def __array_wrap__(self, out_arr, context=None):
+            return super().__array_wrap__(self, out_arr, context)
 
-        # reshape values
-        assert len(values) == self.size
+    def _make_volume(frames, rescale=True):
+        """ return volume from a sequence of frames"""
 
-        volume = []
-        for i in range(shape[0]):
-            volume.append([])
-            for j in range(shape[1]):
-                volume[i].append([])
-                for k in range(shape[2]):
-                    volume[i][j].append(values[k * shape[0] * shape[1] + j * shape[0] + i])
-        super().__init__(volume)
+        # find geometry
+        nframe = len(frames)
+        first = frames[0]
+        last = frames[-1]
+
+        origin = first["ImagePositionPatient"]["value"]
+        end = last["ImagePositionPatient"]["value"]
+        ax1 = first["ImageOrientationPatient"]["value"][:3]
+        ax2 = first["ImageOrientationPatient"]["value"][3:]
+        vec3 = [b - a for a, b in zip(origin, end)]
+        norm3 = math.sqrt(sum(value**2 for value in vec3))
+        if nframe == 1:
+            ax3 = 1
+            spacing3 = 1
+        else:
+            ax3 =  tuple(value / norm3 for value in vec3)
+            spacing3 = [value / (nframe - 1) for value in vec3]
+        axes = (ax1, ax2, ax3)
+        spacing = first["PixelSpacing"]["value"] + [spacing3]
+
+        info = {
+            "origin": tuple(origin),
+            "spacing": tuple(spacing),
+            "axes": tuple(axes),
+        }
+
+        # make volume
+        slices = []
+        for frame in frames:
+            slope, intercept = 1, 0
+            pixels = frame["pixels"]
+            if rescale:
+                slope = frame.get("RescaleSlope", {}).get("value", 1)
+                intercept = frame.get("RescaleSlope", {}).get("value", 0)
+                pixels = pixels * slope + intercept
+            slices.append(pixels.T)
+        return Volume(slices, info).T
 
 
 def list_files(dirpath):
@@ -447,10 +469,10 @@ def load_dicom_frames(dataset):
 
     # pixel data
     pixels = None
-    if "PixelData" in dataset:
-        # unsigned short
-        size = len(dataset.PixelData) // 2
-        pixels = struct.unpack("H" * size, dataset.PixelData)
+    if HAS_NUMPY and "PixelData" in dataset:
+        shape = dataset.pixel_array.shape
+        # add 1st dimension if needed
+        pixels = dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
 
     # put frame into dicts
     frames = []
@@ -458,12 +480,8 @@ def load_dicom_frames(dataset):
         frame = dict(
             (element.keyword, _get_element_info(element)) for element in items
         )
-        if pixels:
-            rows = frame["Rows"]["value"]
-            cols = frame["Columns"]["value"]
-            size = rows * cols
-            frame["pixels"] = pixels[size * i : size * (i + 1)]
-            # frame["pixels"] = [pixels[offset : offset + j * rows] for j in range(cols)]
+        if pixels is not None:
+            frame["pixels"] = pixels[i]
 
         frames.append(frame)
     return frames
