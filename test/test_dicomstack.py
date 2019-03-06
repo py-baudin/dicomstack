@@ -74,9 +74,8 @@ def test_dicomstack_class():
 
     # convert to volume
     volume = stack.as_volume()
-    ndarray = np.asarray(volume)
-    assert ndarray.ndim == 3
-    assert ndarray.size > 1
+    assert volume.ndim == 3
+    assert volume.size > 1
 
     # zipped Signa T1w
 
@@ -98,8 +97,7 @@ def test_dicomstack_class():
 
     # convert to volumes
     echo_times, volumes = stack.as_volume(by="EchoTime")
-    ndarrays = [np.asarray(vol) for vol in volumes]
     assert len(echo_times) == 18
     assert set(echo_times) == set(stack["EchoTime"])
-    assert all(volume.shape == volumes[0].shape for volume in ndarrays[1:])
-    assert all(dim > 1 for dim in ndarrays[0].shape)
+    assert all(volume.shape == volumes[0].shape for volume in volumes[1:])
+    assert all(dim > 1 for dim in volumes[0].shape)
