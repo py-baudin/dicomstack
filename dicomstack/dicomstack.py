@@ -89,12 +89,10 @@ class DICOMStack(object):
 
     def __getitem__(self, fields):
         """ short for get_field_values or _index"""
-        if len(fields) == 1 and isinstance(fields[0], int):
+        if isinstance(fields, int):
             # return item #i
-            return self._index(fields[0])
-
-        if not isinstance(fields, tuple):
-            # return values of given fields
+            return self._index(fields)
+        elif not isinstance(fields, tuple):
             fields = (fields,)
         return self.get_field_values(*fields)
 
@@ -273,7 +271,6 @@ class DICOMStack(object):
         return self.db.get(query.index == index)
 
 
-
 def get_zip_path(path):
     """ return the zip-file root of path """
     if not ".zip" in path:
@@ -313,6 +310,7 @@ def _get_values(element, fields):
         return values[0]
     return tuple(values)
 
+
 # class Volume(list):
 #     """ simple 3d array class with meta data in header """
 #     def __init__(self, header, shape, values):
@@ -341,7 +339,7 @@ if HAS_NUMPY:
         """ simple layer over numpy ndarray to add attribute: volume.info
         """
 
-        def __new__(cls, input_array, info):
+        def __new__(cls, input_array, info=None):
             """ create Volume object """
             # copy the data
             obj = numpy.asarray(input_array).view(cls)
@@ -351,10 +349,16 @@ if HAS_NUMPY:
         def __array_finalize__(self, obj):
             if obj is None:
                 return
-            self.info = getattr(obj, 'info', {})
+            self.info = getattr(obj, "info", {})
 
         def __array_wrap__(self, out_arr, context=None):
+            """ propagate metadata if wrap is called """
             return super().__array_wrap__(self, out_arr, context)
+
+        def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+            """ lose metadata if ufunc is called """
+            inputs = [numpy.asarray(input) for input in inputs]
+            return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
 
     def _make_volume(frames, rescale=True):
         """ return volume from a sequence of frames"""
@@ -366,24 +370,24 @@ if HAS_NUMPY:
 
         origin = first["ImagePositionPatient"]["value"]
         end = last["ImagePositionPatient"]["value"]
-        ax1 = first["ImageOrientationPatient"]["value"][:3]
-        ax2 = first["ImageOrientationPatient"]["value"][3:]
+        ax1 = tuple(first["ImageOrientationPatient"]["value"][:3])
+        ax2 = tuple(first["ImageOrientationPatient"]["value"][3:])
         vec3 = [b - a for a, b in zip(origin, end)]
-        norm3 = math.sqrt(sum(value**2 for value in vec3))
+        norm3 = math.sqrt(sum(value ** 2 for value in vec3))
         if nframe == 1:
-            ax3 = 1
+            ax3 = (
+                ax1[1] * ax2[2] - ax1[2] * ax2[1],
+                ax1[2] * ax2[0] - ax1[0] * ax2[2],
+                ax1[0] * ax2[1] - ax1[1] * ax2[0],
+            )
             spacing3 = 1
         else:
-            ax3 =  tuple(value / norm3 for value in vec3)
-            spacing3 = [value / (nframe - 1) for value in vec3]
+            ax3 = tuple(value / norm3 for value in vec3)
+            spacing3 = norm3 / (nframe - 1)
         axes = (ax1, ax2, ax3)
         spacing = first["PixelSpacing"]["value"] + [spacing3]
 
-        info = {
-            "origin": tuple(origin),
-            "spacing": tuple(spacing),
-            "axes": tuple(axes),
-        }
+        info = {"origin": tuple(origin), "spacing": tuple(spacing), "axes": tuple(axes)}
 
         # make volume
         slices = []
@@ -438,7 +442,7 @@ def load_dicom_frames(dataset):
             return [elements]
         frames = []
         for item in frame_items:
-            frame = list(elements) # copy elements
+            frame = list(elements)  # copy elements
             frame.extend(_list_dicom_elements(item))
             frames.append(frame)
         return frames
@@ -462,9 +466,10 @@ def load_dicom_frames(dataset):
                 return str(value)
 
         return {
-            "name": element.name,
-            "tag": element.tag,
+            "name": str(element.name),
+            "tag": (element.tag.group, element.tag.elem),
             "value": _cast_element_value(element.value),
+            "VR": str(element.VR),
         }
 
     # pixel data
@@ -477,9 +482,7 @@ def load_dicom_frames(dataset):
     # put frame into dicts
     frames = []
     for i, items in enumerate(raw_frames):
-        frame = dict(
-            (element.keyword, _get_element_info(element)) for element in items
-        )
+        frame = dict((element.keyword, _get_element_info(element)) for element in items)
         if pixels is not None:
             frame["pixels"] = pixels[i]
 

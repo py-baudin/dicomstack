@@ -39,6 +39,7 @@ def test_get_zip_path():
         "some", "zipped.zip"
     )
 
+
 def test_dicomstack_class():
     """ test dicomstack class """
 
@@ -58,6 +59,13 @@ def test_dicomstack_class():
     assert stack.filenames == [join(path, filename) for filename in os.listdir(path)]
     assert stack.elements == list(stack)
 
+    assert stack[0]["Manufacturer"] == {
+        "value": "SIEMENS",
+        "tag": (0x8, 0x70),
+        "name": "Manufacturer",
+        "VR": "LO",
+    }
+
     # has field
     assert "ImageType" in stack
     assert not "UnknownField" in stack
@@ -76,6 +84,14 @@ def test_dicomstack_class():
     volume = stack.as_volume()
     assert volume.ndim == 3
     assert volume.size > 1
+    assert "origin" in volume.info
+    assert "spacing" in volume.info
+    assert "axes" in volume.info
+    spacing = stack[0]["PixelSpacing"]["value"]
+    origin = tuple(stack[0]["ImagePositionPatient"]["value"])
+    assert volume.info["spacing"] == tuple(spacing + [1])
+    assert volume.info["axes"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+    assert volume.info["origin"] == origin
 
     # zipped Signa T1w
 
@@ -101,3 +117,10 @@ def test_dicomstack_class():
     assert set(echo_times) == set(stack["EchoTime"])
     assert all(volume.shape == volumes[0].shape for volume in volumes[1:])
     assert all(dim > 1 for dim in volumes[0].shape)
+
+    volume = volumes[0]
+    spacing = stack[0]["PixelSpacing"]["value"]
+    slice_spacing = stack[0]["SpacingBetweenSlices"]["value"]
+    origin = tuple(stack[0]["ImagePositionPatient"]["value"])
+    assert np.all(np.isclose(volume.info["spacing"], spacing + [slice_spacing]))
+    assert volume.info["origin"] == origin
