@@ -27,7 +27,7 @@ except ImportError:
 LOGGER = logging.getLogger(__name__)
 
 
-class DICOMStack(object):
+class DicomStack(object):
     """ load, sort and filter DICOM images
     """
 
