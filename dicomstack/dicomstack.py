@@ -41,7 +41,7 @@ class DicomStack(object):
         self.non_dicom = []
 
         if not filenames and not path:
-            # empty DICOMStack
+            # empty stack
             return
 
         if not filenames:
@@ -85,7 +85,7 @@ class DicomStack(object):
         return iter(self.db)
 
     def __repr__(self):
-        return "DICOMStack(%d)" % len(self.db)
+        return "DICOM(%d)" % len(self.db)
 
     def __getitem__(self, fields):
         """ short for get_field_values or _index"""
@@ -102,7 +102,7 @@ class DicomStack(object):
 
     @classmethod
     def from_elements(cls, elements):
-        """ create a new DICOMStack from a db object """
+        """ create a new stack from a db object """
         if not all(
             [isinstance(element, tinydb.database.Document) for element in elements]
         ):
@@ -114,7 +114,7 @@ class DicomStack(object):
     def filter_by_field(self, **filters):
         """ return a sub stack with matching values for the given field """
         elements = self._filter(**filters)
-        return DICOMStack.from_elements(elements)
+        return self.from_elements(elements)
 
     def get_field_values(self, *fields):
         """ return a list a values for the given fields """
@@ -128,7 +128,7 @@ class DicomStack(object):
         sorted_elements = sorted(elements, key=sort_key)
         for i, element in enumerate(sorted_elements):
             element["index"] = i
-        return DICOMStack.from_elements(sorted_elements)
+        return self.from_elements(sorted_elements)
 
     def as_volume(self, by=None, rescale=True):
         """ as volume """
@@ -398,7 +398,7 @@ if HAS_NUMPY:
                 slope = frame.get("RescaleSlope", {}).get("value", 1)
                 intercept = frame.get("RescaleSlope", {}).get("value", 0)
                 pixels = pixels * slope + intercept
-            slices.append(pixels.T)
+            slices.append(pixels)
         return Volume(slices, info).T
 
 
