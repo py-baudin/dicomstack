@@ -335,30 +335,32 @@ def _get_values(element, fields):
 
 if HAS_NUMPY:
 
-    class Volume(numpy.ndarray):
+    class DicomVolume(numpy.ndarray):
         """ simple layer over numpy ndarray to add attribute: volume.info
         """
 
-        def __new__(cls, input_array, info=None):
+        def __new__(cls, input_array, tags=None):
             """ create Volume object """
             # copy the data
             obj = numpy.asarray(input_array).view(cls)
-            obj.info = info
+            obj.tags = tags
             return obj
 
         def __array_finalize__(self, obj):
             if obj is None:
                 return
-            self.info = getattr(obj, "info", {})
+            self.tags = getattr(obj, "tags", {})
 
         def __array_wrap__(self, out_arr, context=None):
             """ propagate metadata if wrap is called """
             return super().__array_wrap__(self, out_arr, context)
 
-        def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-            """ lose metadata if ufunc is called """
-            inputs = [numpy.asarray(input) for input in inputs]
-            return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
+        def __array_wrap__(self, out_arr, context=None):
+            if self.shape != out_arr.shape:
+                # if not same shape: drop metadata
+                return out_arr
+            # else wrap out_array
+            return numpy.ndarray.__array_wrap__(self, out_arr, context)
 
     def _make_volume(frames, rescale=True):
         """ return volume from a sequence of frames"""
@@ -384,10 +386,18 @@ if HAS_NUMPY:
         else:
             ax3 = tuple(value / norm3 for value in vec3)
             spacing3 = norm3 / (nframe - 1)
-        axes = (ax1, ax2, ax3)
+        transform = (ax1, ax2, ax3)
         spacing = first["PixelSpacing"]["value"] + (spacing3,)
 
-        info = {"origin": tuple(origin), "spacing": tuple(spacing), "axes": tuple(axes)}
+        # anatomical orientation
+        anatomical_orientation = "RAI"
+
+        tags = {
+            "origin": tuple(origin),
+            "spacing": tuple(spacing),
+            "transform": tuple(transform),
+            "orientation": anatomical_orientation,
+            }
 
         # make volume
         slices = []
@@ -399,7 +409,7 @@ if HAS_NUMPY:
                 intercept = frame.get("RescaleSlope", {}).get("value", 0)
                 pixels = pixels * slope + intercept
             slices.append(pixels)
-        return Volume(slices, info).T
+        return DicomVolume(slices, tags).T
 
 
 def list_files(dirpath):
