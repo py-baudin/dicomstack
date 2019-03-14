@@ -44,14 +44,14 @@ def test_dicomstack_class():
     """ test dicomstack class """
 
     # empty path
-    stack = dicomstack.DICOMStack("unknown")
+    stack = dicomstack.DicomStack("unknown")
     assert len(stack) == 0
     assert not stack
 
     # Avanto T1w
 
     path = join(DATA_DIR, "avanto_T1w")
-    stack = dicomstack.DICOMStack(path)
+    stack = dicomstack.DicomStack(path)
 
     # check attributes
     assert len(stack) == 1
@@ -84,19 +84,19 @@ def test_dicomstack_class():
     volume = stack.as_volume()
     assert volume.ndim == 3
     assert volume.size > 1
-    assert "origin" in volume.info
-    assert "spacing" in volume.info
-    assert "axes" in volume.info
+    assert "origin" in volume.tags
+    assert "spacing" in volume.tags
+    assert "transform" in volume.tags
     spacing = stack[0]["PixelSpacing"]["value"]
     origin = tuple(stack[0]["ImagePositionPatient"]["value"])
-    assert volume.info["spacing"] == tuple(spacing + (1,))
-    assert volume.info["axes"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
-    assert volume.info["origin"] == origin
+    assert volume.tags["spacing"] == tuple(spacing + (1,))
+    assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+    assert volume.tags["origin"] == origin
 
     # zipped Signa T1w
 
     path = join(DATA_DIR, "signa_T1w.zip")
-    stack = dicomstack.DICOMStack(path)
+    stack = dicomstack.DicomStack(path)
     assert stack
     assert len(stack) == 1
     assert stack["Manufacturer", "ManufacturerModelName"] == [
@@ -106,7 +106,7 @@ def test_dicomstack_class():
     # ingenia Multi echo
 
     path = join(DATA_DIR, "ingenia_multiecho_enhanced")
-    stack = dicomstack.DICOMStack(path)
+    stack = dicomstack.DicomStack(path)
     assert stack
     assert len(stack) == 90
     assert set(stack["EchoNumbers"]) == set(range(1, 18))
@@ -122,5 +122,5 @@ def test_dicomstack_class():
     spacing = stack[0]["PixelSpacing"]["value"]
     slice_spacing = stack[0]["SpacingBetweenSlices"]["value"]
     origin = tuple(stack[0]["ImagePositionPatient"]["value"])
-    assert np.all(np.isclose(volume.info["spacing"], spacing + (slice_spacing,)))
-    assert volume.info["origin"] == origin
+    assert np.all(np.isclose(volume.tags["spacing"], spacing + (slice_spacing,)))
+    assert volume.tags["origin"] == origin

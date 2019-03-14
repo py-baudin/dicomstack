@@ -1,5 +1,5 @@
-""" pydicom wrapper class for simple manipulation of DICOM data """
 # coding=utf-8
+""" pydicom wrapper class for simple manipulation of DICOM data """
 
 import os
 import math
@@ -389,15 +389,11 @@ if HAS_NUMPY:
         transform = (ax1, ax2, ax3)
         spacing = first["PixelSpacing"]["value"] + (spacing3,)
 
-        # anatomical orientation
-        anatomical_orientation = "RAI"
-
         tags = {
             "origin": tuple(origin),
             "spacing": tuple(spacing),
             "transform": tuple(transform),
-            "orientation": anatomical_orientation,
-            }
+        }
 
         # make volume
         slices = []
