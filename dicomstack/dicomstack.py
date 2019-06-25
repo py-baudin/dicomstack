@@ -100,6 +100,15 @@ class DicomStack(object):
         """ shortcut for filter_by_field """
         return self.filter_by_field(**filters)
 
+    def unique(self, fields):
+        """ return unique value for field """
+        values = list(set(self.get_field_values(*fields)))
+        if len(values) > 0:
+            raise ValueError("Multiple values found for %s" % field)
+        elif not value:
+            raise ValueError("No value found for %s" % field)
+        return values[0]
+
     @classmethod
     def from_elements(cls, elements):
         """ create a new stack from a db object """
