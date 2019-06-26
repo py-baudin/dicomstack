@@ -4,6 +4,7 @@
 import os
 import argparse
 import tempfile
+import json
 import pytest
 
 import numpy as np
@@ -76,6 +77,10 @@ def test_dicomstack_class():
     assert stack["Manufacturer", "ManufacturerModelName"] == [("SIEMENS", "Avanto")]
     assert stack["ImageType_0"] == ["ORIGINAL"]
 
+    # unique
+    assert stack.single("Manufacturer") == "SIEMENS"
+    assert stack.unique("Manufacturer") == ["SIEMENS"]
+
     # filter by fields
     assert not stack.filter_by_field(MagneticFieldStrength=3)
     assert stack(MagneticFieldStrength=1.5)
@@ -93,6 +98,13 @@ def test_dicomstack_class():
     assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.tags["origin"] == origin
 
+    # test serialization
+    dicomtree = stack.dicomtree()
+    stack2 = dicomstack.DicomStack(filenames=dicomtree)
+    assert stack2
+
+
+def test_dicomstack_zipped():
     # zipped Signa T1w
 
     path = join(DATA_DIR, "signa_T1w.zip")
@@ -103,6 +115,8 @@ def test_dicomstack_class():
         ("GE MEDICAL SYSTEMS", "Signa HDxt")
     ]
 
+
+def test_dicomstack_multi(tmpdir):
     # ingenia Multi echo
 
     path = join(DATA_DIR, "ingenia_multiecho_enhanced")
@@ -111,8 +125,13 @@ def test_dicomstack_class():
     assert len(stack) == 90
     assert set(stack["EchoNumbers"]) == set(range(1, 18))
 
+    # multiple echos
+    with pytest.raises(ValueError):
+        stack.single("EchoTime")
+
     # convert to volumes
     echo_times, volumes = stack.as_volume(by="EchoTime")
+    assert echo_times == stack.unique("EchoTime")
     assert len(echo_times) == 18
     assert set(echo_times) == set(stack["EchoTime"])
     assert all(volume.shape == volumes[0].shape for volume in volumes[1:])
@@ -124,3 +143,18 @@ def test_dicomstack_class():
     origin = tuple(stack[0]["ImagePositionPatient"]["value"])
     assert np.all(np.isclose(volume.tags["spacing"], spacing + (slice_spacing,)))
     assert volume.tags["origin"] == origin
+
+    # test serialization
+    substack = stack(EchoTime=echo_times[:2])
+    stack2 = dicomstack.DicomStack(filenames=substack.dicomtree())
+    assert stack2
+    assert stack2.unique("EchoTime") == echo_times[:2]
+
+    # with a json file
+    substack = stack(EchoTime=echo_times[:3])
+    with open(tmpdir.join("dicomtree.json"), "w") as f:
+        json.dump(substack.dicomtree(), f)
+
+    stack3 = dicomstack.DicomStack(tmpdir.join("dicomtree.json").strpath)
+    assert stack3
+    assert stack3.unique("EchoTime") == echo_times[:3]

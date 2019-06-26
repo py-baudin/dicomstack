@@ -3,14 +3,16 @@
 
 import os
 import math
+import json
 import glob
 import functools
 import zipfile
 import struct
+import logging
 from io import BytesIO
 from operator import mul
 from functools import reduce
-import logging
+from collections import defaultdict
 
 import pydicom
 import tinydb
@@ -36,6 +38,7 @@ class DicomStack(object):
             * a directory (or a list of),
             * a file (or a list of)
             * a zip file
+            * a dicomtree JSON file
         """
         self.db = tinydb.TinyDB(storage=tinydb.storages.MemoryStorage)
         self.non_dicom = []
@@ -100,14 +103,18 @@ class DicomStack(object):
         """ shortcut for filter_by_field """
         return self.filter_by_field(**filters)
 
-    def unique(self, fields):
-        """ return unique value for field """
+    def single(self, *fields):
+        """ return single value for field """
         values = list(set(self.get_field_values(*fields)))
-        if len(values) > 0:
-            raise ValueError("Multiple values found for %s" % field)
-        elif not value:
-            raise ValueError("No value found for %s" % field)
+        if len(values) > 1:
+            raise ValueError("Multiple values found for %s" % fields)
+        elif not values:
+            raise ValueError("No value found for %s" % fields)
         return values[0]
+
+    def unique(self, *fields):
+        """ return unique values for field """
+        return sorted(set(self.get_field_values(*fields)))
 
     @classmethod
     def from_elements(cls, elements):
@@ -182,26 +189,39 @@ class DicomStack(object):
     def load_files(self, filenames):
         """ load filenames """
 
-        filenames = sorted(set(os.path.normpath(f) for f in filenames))
+        if isinstance(filenames, dict):
+            filters = filenames
+        else:
+            filenames = sorted(set(filenames))
+            filters = {}
+
         for filename in filenames:
+
+            # check if file is zipped
             zip_path = get_zip_path(filename)
             if zip_path:
-                self.load_zipfile(filename)
+                self.load_zipfile(filename, filters.get(filename))
                 continue
 
-            elif not pydicom.misc.is_dicom(filename):
-                # if not DICOM
-                self.non_dicom.append(filename)
+            try:
+                # read dicom object
+                dicom_obj = pydicom.dcmread(filename)
+
+            except (IOError, pydicom.errors.InvalidDicomError):
+                try:
+                    # load json dicomtree
+                    with open(filename, "r") as f:
+                        dicomtree = json.load(f)
+                    self.load_files(dicomtree)
+                except:
+                    # other files
+                    self.non_dicom.append(filename)
                 continue
 
-            dicom_obj = pydicom.dcmread(filename)
-            frames = load_dicom_frames(dicom_obj)
-            for frame in frames:
-                frame["filename"] = filename
-                frame["index"] = len(self.db)
-                self.db.insert(frame)
+            # retrieve DICOM data
+            self._load_frames(filename, dicom_obj, filters.get(filename))
 
-    def load_zipfile(self, filename):
+    def load_zipfile(self, filename, filters=None):
         """ load files in zipfile"""
         zip_path = get_zip_path(filename)
         assert zipfile.is_zipfile(zip_path)
@@ -221,15 +241,28 @@ class DicomStack(object):
                 dicom_bytes = BytesIO(rawfile)
 
                 try:
+                    # read dicom object
                     dicom_obj = pydicom.read_file(dicom_bytes)
                 except IOError:
                     self.non_dicom.append(zfilename)
 
-                frames = load_dicom_frames(dicom_obj)
-                for frame in frames:
-                    frame["filename"] = full_zfilename
-                    frame["index"] = len(self.db)
-                    self.db.insert(frame)
+                # retrieve DICOM data
+                self._load_frames(full_zfilename, dicom_obj, filters)
+
+    def _load_frames(self, filename, dicom_obj, filters=None):
+        """ retrieve and store DICOM data in dicom_obj"""
+        frames = load_dicom_frames(dicom_obj)
+
+        for frame in frames:
+            if filters:
+                uid = [f["instance_uid"] for f in filters]
+                if not frame["SOPInstanceUID"]["value"] in uid:
+                    continue
+
+            index = len(self.db)
+            frame["filename"] = os.path.normpath(filename)
+            frame["index"] = index
+            self.db.insert(frame)
 
     def has_field(self, field):
         """ check whether a field is present """
@@ -279,6 +312,35 @@ class DicomStack(object):
         query = tinydb.Query()
         return self.db.get(query.index == index)
 
+    def dicomtree(self, root="."):
+        """ return serializable summary of DicomStack """
+        dicomtree = defaultdict(list)
+
+        def get(element, field):
+            field = element.get(field)
+            if not field:
+                return None
+            return field["value"]
+
+        for element in self.elements:
+            filename = os.path.relpath(element["filename"], start=root)
+            dicomtree[filename].append(
+                {
+                    "study_id": get(element, "StudyID"),
+                    "study_description": get(element, "StudyDescription"),
+                    "study_uid": element["StudyInstanceUID"]["value"],
+                    "series_number": get(element, "SeriesNumber"),
+                    "series_description": get(element, "SeriesDescription"),
+                    "series_uid": element["SeriesInstanceUID"]["value"],
+                    "instance_uid": element["SOPInstanceUID"]["value"],
+                }
+            )
+        # add non dicom:
+        for filename in self.non_dicom:
+            dicomtree["filename"].append({})
+
+        return dicomtree
+
 
 def get_zip_path(path):
     """ return the zip-file root of path """
@@ -319,28 +381,6 @@ def _get_values(element, fields):
         return values[0]
     return tuple(values)
 
-
-# class Volume(list):
-#     """ simple 3d array class with meta data in header """
-#     def __init__(self, header, shape, values):
-#         assert "spacing" in header
-#         assert "origin" in header
-#         assert "axes" in header
-#         self.header = dict(header)
-#         self.shape = tuple(shape)
-#         self.size = reduce(mul, self.shape)
-#
-#         # reshape values
-#         assert len(values) == self.size
-#
-#         volume = []
-#         for i in range(shape[0]):
-#             volume.append([])
-#             for j in range(shape[1]):
-#                 volume[i].append([])
-#                 for k in range(shape[2]):
-#                     volume[i][j].append(values[k * shape[0] * shape[1] + j * shape[0] + i])
-#         super().__init__(volume)
 
 if HAS_NUMPY:
 
@@ -488,18 +528,31 @@ def load_dicom_frames(dataset):
         }
 
     # pixel data
-    pixels = None
+    pixel_array = None
     if HAS_NUMPY and "PixelData" in dataset:
         shape = dataset.pixel_array.shape
         # add 1st dimension if needed
-        pixels = dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
+        pixel_array = dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
 
     # put frame into dicts
     frames = []
     for i, items in enumerate(raw_frames):
         frame = dict((element.keyword, _get_element_info(element)) for element in items)
-        if pixels is not None:
-            frame["pixels"] = pixels[i]
-
+        frame["pixels"] = pixel_array[i]
         frames.append(frame)
     return frames
+
+
+# class PixelArray:
+#     def __init__(self, dataset):
+#         self.dataset = dataset
+#         self.index = None
+#     def __getitem__(self, key):
+#         """ return obj with """
+#          pa = PixelArray(self.dataset)
+#          pa.index = key
+#          return pa
+#     @property
+#     def data(self):
+#         shape = self.dataset.pixel_array.shape
+#         return self.dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
