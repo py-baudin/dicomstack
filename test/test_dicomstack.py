@@ -7,11 +7,30 @@ import tempfile
 import pytest
 
 import numpy as np
+import pydicom
 
 from os.path import dirname, join
 from dicomstack import dicomstack
 
 DATA_DIR = join(dirname(dirname(dicomstack.__file__)), "data")
+
+
+def test_load_dicom_frames():
+    """ test dicom loader """
+    path = join(DATA_DIR, "avanto_T1w", "file1")
+    dataset = pydicom.dcmread(path)
+    frames = dicomstack.load_dicom_frames(dataset)
+    assert len(frames) == 1
+    assert "ImageType" in frames[0]["elements"]
+    assert frames[0]["elements"]["ImageType"]["value"][:2] == ("ORIGINAL", "PRIMARY")
+
+    # enhanced-dicom
+    path = join(DATA_DIR, "ingenia_multiecho_enhanced", "file2")
+    dataset = pydicom.dcmread(path)
+    frames = dicomstack.load_dicom_frames(dataset)
+    assert len(frames) == 90
+    assert all(frame["dataset"] is dataset for frame in frames)
+    assert all("EchoTime" in frame["elements"] for frame in frames)
 
 
 def test_parse_field():
@@ -40,7 +59,7 @@ def test_get_zip_path():
     )
 
 
-def test_dicomstack_class():
+def test_dicomstack_class(tmpdir):
     """ test dicomstack class """
 
     # empty path
@@ -57,14 +76,12 @@ def test_dicomstack_class():
     assert len(stack) == 1
     assert stack
     assert stack.filenames == [join(path, filename) for filename in os.listdir(path)]
-    assert stack.elements == list(stack)
+    assert stack.frames == list(stack)
 
-    assert stack[0]["Manufacturer"] == {
-        "value": "SIEMENS",
-        "tag": (0x8, 0x70),
-        "name": "Manufacturer",
-        "VR": "LO",
-    }
+    assert stack[0]["Manufacturer"]["value"] == "SIEMENS"
+    assert stack[0]["Manufacturer"]["tag"] == (0x8, 0x70)
+    assert stack[0]["Manufacturer"]["name"] == "Manufacturer"
+    assert stack[0]["Manufacturer"]["VR"] == "LO"
 
     # has field
     assert "ImageType" in stack
@@ -92,6 +109,13 @@ def test_dicomstack_class():
     assert volume.tags["spacing"] == tuple(spacing + (1,))
     assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.tags["origin"] == origin
+
+    # save
+    dir1 = tmpdir.mkdir("dir1")
+    stack.save(dir1)
+
+    stack2 = dicomstack.DicomStack(dir1)
+    assert stack2[0] == stack[0]
 
     # zipped Signa T1w
 

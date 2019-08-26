@@ -46,7 +46,7 @@ class DicomStack(object):
 
         if not filenames:
             # search path
-            pathes = glob.glob(path)
+            pathes = glob.glob(str(path))
             filenames = []
             for path in pathes:
                 if os.path.isdir(path):
@@ -54,19 +54,19 @@ class DicomStack(object):
                 else:
                     filenames.append(path)
 
-        elif isinstance(filenames, str):
+        elif not isinstance(filenames, list):
             filenames = [filenames]
 
         # load dicom files
         self.load_files(filenames)
 
     @property
-    def elements(self):
+    def frames(self):
         return self.db.all()
 
     @property
     def filenames(self):
-        return [element["filename"] for element in self.elements]
+        return [frame["filename"] for frame in self.frames]
 
     def __len__(self):
         """ number of DICOM images """
@@ -81,63 +81,74 @@ class DicomStack(object):
         return self.has_field(field)
 
     def __iter__(self):
-        """ iterates dicom elements """
+        """ iterates dicom frames """
         return iter(self.db)
 
     def __repr__(self):
         return "DICOM(%d)" % len(self.db)
 
-    def __getitem__(self, fields):
+    def __getitem__(self, items):
         """ short for get_field_values or _index"""
-        if isinstance(fields, int):
+        if isinstance(items, int):
             # return item #i
-            return self._index(fields)
-        elif not isinstance(fields, tuple):
-            fields = (fields,)
-        return self.get_field_values(*fields)
+            return self._index(items)["elements"]
+        elif not isinstance(items, (tuple, list)):
+            items = [items]
+        return self.get_field_values(*items)
 
     def __call__(self, **filters):
         """ shortcut for filter_by_field """
         return self.filter_by_field(**filters)
 
-    def unique(self, fields):
+    def unique(self, *fields):
         """ return unique value for field """
         values = list(set(self.get_field_values(*fields)))
-        if len(values) > 0:
-            raise ValueError("Multiple values found for %s" % field)
-        elif not value:
-            raise ValueError("No value found for %s" % field)
+        if len(values) > 1:
+            raise ValueError("Multiple values found for %s" % fields)
+        elif not values:
+            raise ValueError("No value found for %s" % fields)
         return values[0]
 
     @classmethod
-    def from_elements(cls, elements):
+    def from_frames(cls, frames):
         """ create a new stack from a db object """
-        if not all(
-            [isinstance(element, tinydb.database.Document) for element in elements]
-        ):
+        if not all([isinstance(frame, tinydb.database.Document) for frame in frames]):
             raise TypeError
         stack = cls()
-        stack.db.insert_multiple(elements)
+        stack.db.insert_multiple(frames)
         return stack
+
+    def save(self, dest):
+        """ save stack to destination """
+        if not os.path.isdir(dest):
+            # create directory
+            os.makedirs(dest)
+        elif os.listdir(dest):
+            raise ValueError("Destination is not empty")
+
+        for frame in self.frames:
+            dataset = frame["dataset"]
+            filename = os.path.join(dest, os.path.basename(frame["filename"]))
+            pydicom.dcmwrite(filename, dataset, write_like_original=False)
 
     def filter_by_field(self, **filters):
         """ return a sub stack with matching values for the given field """
-        elements = self._filter(**filters)
-        return self.from_elements(elements)
+        frames = self._filter(**filters)
+        return self.from_frames(frames)
 
     def get_field_values(self, *fields):
         """ return a list a values for the given fields """
-        elements = self._existing(*fields)
-        return [_get_values(element, fields=fields) for element in elements]
+        frames = self._existing(*fields)
+        return [_get_values(frame, fields=fields) for frame in frames]
 
     def sort(self, *fields):
         """ reindex database using field values """
-        elements = self._existing(*fields)
+        frames = self._existing(*fields)
         sort_key = functools.partial(_get_values, fields=fields)
-        sorted_elements = sorted(elements, key=sort_key)
-        for i, element in enumerate(sorted_elements):
-            element["index"] = i
-        return self.from_elements(sorted_elements)
+        sorted_frames = sorted(frames, key=sort_key)
+        for i, frame in enumerate(sorted_frames):
+            frame["index"] = i
+        return self.from_frames(sorted_frames)
 
     def as_volume(self, by=None, rescale=True):
         """ as volume """
@@ -154,7 +165,7 @@ class DicomStack(object):
 
         if not by:
             # single non-indexed volume
-            return _make_volume(stack.elements, rescale=rescale)
+            return _make_volume(stack.frames, rescale=rescale)
 
         # else: indexed volumes
 
@@ -176,7 +187,7 @@ class DicomStack(object):
         volumes = []
         for filter in filters:
             substack = stack.filter_by_field(**filter)
-            volumes.append(_make_volume(substack.elements, rescale=rescale))
+            volumes.append(_make_volume(substack.frames, rescale=rescale))
         return indices, volumes
 
     def load_files(self, filenames):
@@ -233,13 +244,13 @@ class DicomStack(object):
 
     def has_field(self, field):
         """ check whether a field is present """
-        query = tinydb.Query()
-        cond = query[field].exists()
+        cond = tinydb.where("elements")[field].exists()
         return bool(self.db.search(cond))
 
     def _existing(self, *items):
-        """ return elements with existing values"""
-        query = tinydb.Query()
+        """ return frames with existing values"""
+        # query = tinydb.Query()
+        query = tinydb.where("elements")
         condition = None
         for item in items:
             if not isinstance(item, str):
@@ -258,8 +269,9 @@ class DicomStack(object):
         return self.db.search(condition)
 
     def _filter(self, **filters):
-        """ return elements filtered by fields """
-        query = tinydb.Query()
+        """ return frames filtered by fields """
+        # query = tinydb.Query()
+        query = tinydb.where("elements")
         condition = None
         for name, value in filters.items():
             field, index = _parse_field(name)
@@ -275,7 +287,7 @@ class DicomStack(object):
         return self.db.search(condition)
 
     def _index(self, index):
-        """ return element matching index """
+        """ return frames matching index """
         query = tinydb.Query()
         return self.db.get(query.index == index)
 
@@ -306,41 +318,20 @@ def _parse_field(string):
     return field, index
 
 
-def _get_values(element, fields):
+def _get_values(frame, fields):
     """ get DICOM element value """
+    elements = frame["elements"]
     values = []
     for name in fields:
         field, index = _parse_field(name)
         if index is not None:
-            values.append(element[field]["value"][index])
+            values.append(elements[field]["value"][index])
             continue
-        values.append(element[field]["value"])
+        values.append(elements[field]["value"])
     if len(fields) == 1:
         return values[0]
     return tuple(values)
 
-
-# class Volume(list):
-#     """ simple 3d array class with meta data in header """
-#     def __init__(self, header, shape, values):
-#         assert "spacing" in header
-#         assert "origin" in header
-#         assert "axes" in header
-#         self.header = dict(header)
-#         self.shape = tuple(shape)
-#         self.size = reduce(mul, self.shape)
-#
-#         # reshape values
-#         assert len(values) == self.size
-#
-#         volume = []
-#         for i in range(shape[0]):
-#             volume.append([])
-#             for j in range(shape[1]):
-#                 volume[i].append([])
-#                 for k in range(shape[2]):
-#                     volume[i][j].append(values[k * shape[0] * shape[1] + j * shape[0] + i])
-#         super().__init__(volume)
 
 if HAS_NUMPY:
 
@@ -376,8 +367,8 @@ if HAS_NUMPY:
 
         # find geometry
         nframe = len(frames)
-        first = frames[0]
-        last = frames[-1]
+        first = frames[0]["elements"]
+        last = frames[-1]["elements"]
 
         origin = first["ImagePositionPatient"]["value"]
         end = last["ImagePositionPatient"]["value"]
@@ -409,9 +400,10 @@ if HAS_NUMPY:
         for frame in frames:
             slope, intercept = 1, 0
             pixels = frame["pixels"]
+            elements = frame["elements"]
             if rescale:
-                slope = frame.get("RescaleSlope", {}).get("value", 1)
-                intercept = frame.get("RescaleSlope", {}).get("value", 0)
+                slope = elements.get("RescaleSlope", {}).get("value", 1)
+                intercept = elements.get("RescaleSlope", {}).get("value", 0)
                 pixels = pixels * slope + intercept
             slices.append(pixels)
         return DicomVolume(slices, tags).T
@@ -426,66 +418,74 @@ def list_files(dirpath):
 
 
 def load_dicom_frames(dataset):
-    """ load all dicom fields in dataset"""
+    """ load all dicom fields in dataset """
 
-    def _list_dicom_elements(dataset, root=False):
-        elements, sequences = [], []
-        frame_items = None
-        for item in dataset:
-            if item.keyword == "PixelData":
-                # skip
-                continue
-            elif item.keyword == "PerFrameFunctionalGroupsSequence":
-                # multi-frame DICOM
-                frame_items = item
-            elif item.VR == "SQ":
-                # other sequences
-                sequences.append(item)
-            else:
-                elements.append(item)
-
-        # flatten sequences
-        for sequence in sequences:
-            for item in sequence:
-                elements.extend(_list_dicom_elements(item))
-
-        if not root:
-            return elements
-
-        # else: solve frames (root level only)
-        if not frame_items:
-            return [elements]
-        frames = []
-        for item in frame_items:
-            frame = list(elements)  # copy elements
-            frame.extend(_list_dicom_elements(item))
-            frames.append(frame)
-        return frames
-
-    raw_frames = _list_dicom_elements(dataset, root=True)
-
-    def _get_element_info(element):
-        def _cast_element_value(value):
-            if isinstance(value, pydicom.multival.MultiValue):
-                # if value is an array
-                return tuple([_cast_element_value(v) for v in value])
-            elif isinstance(value, pydicom.valuerep.DSfloat):
-                # if value is defined as float
-                if value.is_integer():
-                    return int(value)
-                return value.real
-            # else try force casting to int
-            try:
+    def _cast_element_value(value):
+        if isinstance(value, pydicom.multival.MultiValue):
+            # if value is an array
+            return tuple([_cast_element_value(v) for v in value])
+        elif isinstance(value, pydicom.valuerep.DSfloat):
+            # if value is defined as float
+            if value.is_integer():
                 return int(value)
-            except (TypeError, ValueError):
-                return str(value)
+            return value.real
+        # else try force casting to int
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return str(value)
 
+    def _parse_dataelement(element):
+        if element.VR == "SQ":
+            # if element is a sequence, recurse
+            value = [_parse_dataset(d) for d in element]
+        else:
+            # else cast to simple value
+            value = _cast_element_value(element.value)
         return {
             "name": str(element.name),
             "tag": (element.tag.group, element.tag.elem),
-            "value": _cast_element_value(element.value),
+            "value": value,
             "VR": str(element.VR),
         }
+
+    def _parse_dataset(dataset, root=False, flatten=False):
+        elements = {}
+        multi_frames = None
+        for element in dataset:
+            if element.keyword == "PixelData":
+                # skip
+                continue
+            elif element.keyword == "PerFrameFunctionalGroupsSequence":
+                # multi-frame DICOM
+                multi_frames = element
+            elif flatten and element.VR == "SQ":
+                # extend elements
+                for dataset in element:
+                    elements.update(_parse_dataset(dataset, flatten=True))
+            else:
+                # append to elements
+                keyword = element.keyword
+                elements[keyword] = _parse_dataelement(element)
+
+        if not root:
+            # return list of elements
+            return elements
+
+        # else, solve multi-frame case (root level only)
+        if not multi_frames:
+            # single frame
+            return [elements]
+
+        # else: multiple frames
+        frames = []
+        for frame_elements in multi_frames:
+            # update elements from current frame
+            frame = dict(elements, **_parse_dataset(frame_elements, flatten=True))
+            frames.append(frame)
+        return frames
+
+    frame_elements = _parse_dataset(dataset, root=True)
 
     # pixel data
     pixels = None
@@ -494,12 +494,100 @@ def load_dicom_frames(dataset):
         # add 1st dimension if needed
         pixels = dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
 
-    # put frame into dicts
+    # return frames
     frames = []
-    for i, items in enumerate(raw_frames):
-        frame = dict((element.keyword, _get_element_info(element)) for element in items)
+    for i, elements in enumerate(frame_elements):
+        frame = {}
+        frame["elements"] = elements
         if pixels is not None:
             frame["pixels"] = pixels[i]
-
+        frame["dataset"] = dataset
         frames.append(frame)
     return frames
+
+
+#
+# def load_dicom_frames(dataset):
+#     """ load all dicom fields in dataset"""
+#
+#     def _list_dicom_elements(dataset, root=False):
+#         elements, sequences = [], []
+#         frame_items = None
+#         for item in dataset:
+#             if item.keyword == "PixelData":
+#                 # skip
+#                 continue
+#             elif item.keyword == "PerFrameFunctionalGroupsSequence":
+#                 # multi-frame DICOM
+#                 frame_elements = item
+#             elif item.VR == "SQ":
+#                 # other sequences
+#                 sequences.append(item)
+#             else:
+#                 elements.append(item)
+#
+#         # flatten sequences
+#         for sequence in sequences:
+#             for item in sequence:
+#                 elements.extend(_list_dicom_elements(item))
+#
+#         if not root:
+#             return elements
+#
+#         # else: solve frames (root level only)
+#         if not frame_items:
+#             # single frame
+#             return [elements]
+#
+#         # else: multiple frames
+#         frames = []
+#         for _elements in frame_elements:
+#             # copy current elements
+#             frame = list(elements)
+#             # add elements from current frame
+#             frame.extend(_list_dicom_elements(_elements))
+#             frames.append(frame)
+#         return frames
+#
+#     raw_frames = _list_dicom_elements(dataset, root=True)
+#
+#     def _get_element_info(element):
+#         def _cast_element_value(value):
+#             if isinstance(value, pydicom.multival.MultiValue):
+#                 # if value is an array
+#                 return tuple([_cast_element_value(v) for v in value])
+#             elif isinstance(value, pydicom.valuerep.DSfloat):
+#                 # if value is defined as float
+#                 if value.is_integer():
+#                     return int(value)
+#                 return value.real
+#             # else try force casting to int
+#             try:
+#                 return int(value)
+#             except (TypeError, ValueError):
+#                 return str(value)
+#
+#         return {
+#             "name": str(element.name),
+#             "tag": (element.tag.group, element.tag.elem),
+#             "value": _cast_element_value(element.value),
+#             "VR": str(element.VR),
+#         }
+#
+#     # pixel data
+#     pixels = None
+#     if HAS_NUMPY and "PixelData" in dataset:
+#         shape = dataset.pixel_array.shape
+#         # add 1st dimension if needed
+#         pixels = dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
+#
+#     # put frame into dicts
+#     frames = []
+#     for i, items in enumerate(raw_frames):
+#         frame = dict((element.keyword, _get_element_info(element)) for element in items)
+#         if pixels is not None:
+#             frame["pixels"] = pixels[i]
+#
+#         frame["dataset"] = dataset
+#         frames.append(frame)
+#     return frames
