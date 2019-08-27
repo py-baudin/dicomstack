@@ -216,7 +216,7 @@ class DicomStack(object):
             values = frame.get(*filters)
             if values is None:
                 continue
-            elif not isinstance(values, list):
+            elif len(filters) == 1:
                 values = [values]
             if not all(v in m for v, m in zip(values, matchlist)):
                 continue
@@ -471,7 +471,7 @@ class DicomFrame:
         """ retrieve DICOM field values """
         if self._elements is None:
             # retrieve elements from dataset
-            LOGGER.info(f"Loading DICOM elements from: '{self.dicomfile.filename}'")
+            # LOGGER.info(f"Loading DICOM elements from: '{self.dicomfile.filename}'")
             elements = parse_dataset(self.dicomfile.dataset, self.index)
             self._elements = OrderedDict((e.keyword, e) for e in elements)
         return self._elements
