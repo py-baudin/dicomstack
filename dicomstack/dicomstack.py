@@ -577,7 +577,7 @@ def parse_element(element):
             sequence.extend(parse_dataset(d))
         return sequence
 
-    elif element.VR == "UI":
+    elif element.VR in ["UI", "SH", "LT", "PN", "UT", "OW"]:
         return str(element.value)
 
     elif element.VR == "DA":
