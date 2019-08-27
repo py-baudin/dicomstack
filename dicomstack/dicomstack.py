@@ -1,21 +1,15 @@
+""" pydicom wrapper class for easy manipulation of DICOM data """
 # coding=utf-8
-""" pydicom wrapper class for simple manipulation of DICOM data """
 
 import os
 import math
-import json
 import glob
+import datetime
 import functools
-import zipfile
-import struct
-import logging
 from io import BytesIO
-from operator import mul
-from functools import reduce
-from collections import defaultdict
-
+from collections import OrderedDict
+import zipfile
 import pydicom
-import tinydb
 
 try:
     import numpy
@@ -24,9 +18,6 @@ try:
 except ImportError:
     # no pixel array support
     HAS_NUMPY = False
-
-
-LOGGER = logging.getLogger(__name__)
 
 
 class DicomStack(object):
@@ -38,70 +29,89 @@ class DicomStack(object):
             * a directory (or a list of),
             * a file (or a list of)
             * a zip file
-            * a dicomtree JSON file
         """
-        self.db = tinydb.TinyDB(storage=tinydb.storages.MemoryStorage)
+        self.frames = []
         self.non_dicom = []
 
         if not filenames and not path:
             # empty stack
             return
 
-        if not filenames:
+        elif not filenames:
             # search path
-            pathes = glob.glob(str(path))
-            filenames = []
-            for path in pathes:
-                if os.path.isdir(path):
-                    filenames.extend(list_files(path))
-                else:
-                    filenames.append(path)
+            filenames = list_files(path)
 
-        elif not isinstance(filenames, list):
+        elif not isinstance(filenames, (list, tuple)):
             filenames = [filenames]
 
         # load dicom files
-        self.load_files(filenames)
+        self._load_files(filenames)
 
-    @property
-    def frames(self):
-        return self.db.all()
-
-    @property
-    def filenames(self):
-        return [frame["filename"] for frame in self.frames]
+    @classmethod
+    def from_frames(cls, frames):
+        """ create a new stack from list of frames """
+        if not all([isinstance(frame, DicomFrame) for frame in frames]):
+            raise TypeError
+        stack = cls()
+        stack.frames = frames
+        return stack
 
     def __len__(self):
         """ number of DICOM images """
-        return len(self.db)
+        return len(self.frames)
 
     def __bool__(self):
         """ return True if stack is not empty """
         return len(self) > 0
 
-    def __contains__(self, field):
-        """ test if field is present """
-        return self.has_field(field)
-
     def __iter__(self):
         """ iterates dicom frames """
-        return iter(self.db)
+        return iter(self.frames)
 
     def __repr__(self):
-        return "DICOM(%d)" % len(self.db)
+        return "DICOM(%d)" % len(self)
 
-    def __getitem__(self, items):
-        """ short for get_field_values or _index"""
-        if isinstance(items, int):
-            # return item #i
-            return self._index(items)["elements"]
-        elif not isinstance(items, (tuple, list)):
-            items = [items]
-        return self.get_field_values(*items)
+    @property
+    def filenames(self):
+        """ return list of dicom files """
+        return [frame.dicomfile.filename for frame in self.frames]
+
+    @property
+    def dicomtree(self):
+        def _describe(frame):
+            return {
+                # UID and number
+                "StudyInstanceUID": frame["StudyInstanceUID"],
+                "SeriesInstanceUID": frame["SeriesInstanceUID"],
+                "StudyID": frame["StudyID"],
+                "SeriesNumber": frame["SeriesNumber"],
+                # dates and time
+                "StudyDate": frame["StudyDate"],
+                "StudyTime": frame["StudyTime"],
+                # patient
+                "PatientID": frame["PatientID"],
+                # description
+                "StudyDescription": frame.get("StudyDescription"),
+                "SeriesDescription": frame.get("SeriesDescription"),
+                # file
+                "filename": frame.dicomfile.filename,
+                "pixel_data": frame.dicomfile.pixels is not None,
+            }
+
+        return {
+            "DICOM": [_describe(frame) for frame in self.frames],
+            "NON_DICOM": self.non_dicom,
+        }
 
     def __call__(self, **filters):
-        """ shortcut for filter_by_field """
+        """ short for filter_by_field """
         return self.filter_by_field(**filters)
+
+    def __getitem__(self, items):
+        """ short for get_field_values"""
+        if not isinstance(items, (tuple, list)):
+            items = [items]
+        return self.get_field_values(*items)
 
     def single(self, *fields):
         """ return single value for field """
@@ -116,28 +126,6 @@ class DicomStack(object):
         """ return unique values for field """
         return sorted(set(self.get_field_values(*fields)))
 
-    @classmethod
-    def from_frames(cls, frames):
-        """ create a new stack from a db object """
-        if not all([isinstance(frame, tinydb.database.Document) for frame in frames]):
-            raise TypeError
-        stack = cls()
-        stack.db.insert_multiple(frames)
-        return stack
-
-    def save(self, dest):
-        """ save stack to destination """
-        if not os.path.isdir(dest):
-            # create directory
-            os.makedirs(dest)
-        elif os.listdir(dest):
-            raise ValueError("Destination is not empty")
-
-        for frame in self.frames:
-            dataset = frame["dataset"]
-            filename = os.path.join(dest, os.path.basename(frame["filename"]))
-            pydicom.dcmwrite(filename, dataset, write_like_original=False)
-
     def filter_by_field(self, **filters):
         """ return a sub stack with matching values for the given field """
         frames = self._filter(**filters)
@@ -146,21 +134,22 @@ class DicomStack(object):
     def get_field_values(self, *fields):
         """ return a list a values for the given fields """
         frames = self._existing(*fields)
-        return [_get_values(frame, fields=fields) for frame in frames]
+        return [frame.get(*fields) for frame in frames]
 
     def sort(self, *fields):
         """ reindex database using field values """
         frames = self._existing(*fields)
-        sort_key = functools.partial(_get_values, fields=fields)
-        sorted_frames = sorted(frames, key=sort_key)
-        for i, frame in enumerate(sorted_frames):
-            frame["index"] = i
+        sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
         return self.from_frames(sorted_frames)
+
+    def has_field(self, field):
+        """ return True if all frame have the given field """
+        return all(frame.get(field) is not None for frame in self.frames)
 
     def as_volume(self, by=None, rescale=True):
         """ as volume """
         if not HAS_NUMPY:
-            raise ImportError("numpy required")
+            raise NotImplementedError("numpy is required")
 
         # sort by position
         if self.has_field("InStackPositionNumber"):
@@ -197,45 +186,68 @@ class DicomStack(object):
             volumes.append(_make_volume(substack.frames, rescale=rescale))
         return indices, volumes
 
-    def load_files(self, filenames):
+    def _existing(self, *fields):
+        """ return frames with existing values"""
+        filtered = []
+        for frame in self.frames:
+            if frame.get(*fields) is None:
+                # check index exists
+                continue
+            filtered.append(frame)
+        return filtered
+
+    def _filter(self, **filters):
+        """ return frames filtered by fields """
+        fields = list(filters)
+
+        matchlist = []
+        for field in fields:
+            match = filters[field]
+            if not isinstance(match, list):
+                matchlist.append([match])
+            else:
+                matchlist.append(match)
+
+        filtered = []
+        for frame in self.frames:
+            values = frame.get(*filters)
+            if values is None:
+                continue
+            elif not isinstance(values, list):
+                values = [values]
+            if not all(v in m for v, m in zip(values, matchlist)):
+                continue
+            filtered.append(frame)
+        return filtered
+
+    def _load_files(self, filenames):
         """ load filenames """
-
-        if isinstance(filenames, dict):
-            filters = filenames
-        else:
-            filenames = sorted(set(filenames))
-            filters = {}
-
         for filename in filenames:
-
-            # check if file is zipped
             zip_path = get_zip_path(filename)
             if zip_path:
-                self.load_zipfile(filename, filters.get(filename))
-                continue
+                self._load_zipfile(filename)
+            else:
+                self._load_file(filename)
 
-            try:
-                # read dicom object
-                dicom_obj = pydicom.dcmread(filename)
+    def _load_file(self, filename):
+        """ load single Dicom file """
+        # read dicom object
+        dicomfile = DicomFile(filename)
 
-            except (IOError, pydicom.errors.InvalidDicomError):
-                try:
-                    # load json dicomtree
-                    with open(filename, "r") as f:
-                        dicomtree = json.load(f)
-                    self.load_files(dicomtree)
-                except:
-                    # other files
-                    self.non_dicom.append(filename)
-                continue
+        try:
+            frames = dicomfile.get_frames()
+        except (IOError, pydicom.errors.InvalidDicomError):
+            # other files
+            self.non_dicom.append(filename)
+        else:
+            self.frames.extend(frames)
 
-            # retrieve DICOM data
-            self._load_frames(filename, dicom_obj, filters.get(filename))
-
-    def load_zipfile(self, filename, filters=None):
+    def _load_zipfile(self, filename):
         """ load files in zipfile"""
         zip_path = get_zip_path(filename)
-        assert zipfile.is_zipfile(zip_path)
+        if not zipfile.is_zipfile(zip_path):
+            self.non_dicom.append(filename)
+
         with zipfile.ZipFile(zip_path, "r") as zf:
             for zfile in zf.filelist:
 
@@ -247,153 +259,16 @@ class DicomStack(object):
                 if not filename in full_zfilename:
                     continue
 
-                # read file
-                rawfile = zf.read(zfile)
-                dicom_bytes = BytesIO(rawfile)
+                # read dicom object
+                dicomfile = DicomFile(full_zfilename, bytes=zf.read(zfile))
 
                 try:
-                    # read dicom object
-                    dicom_obj = pydicom.read_file(dicom_bytes)
-                except IOError:
-                    self.non_dicom.append(zfilename)
-
-                # retrieve DICOM data
-                self._load_frames(full_zfilename, dicom_obj, filters)
-
-    def _load_frames(self, filename, dicom_obj, filters=None):
-        """ retrieve and store DICOM data in dicom_obj"""
-        frames = load_dicom_frames(dicom_obj)
-
-        for frame in frames:
-            if filters:
-                uid = [f["instance_uid"] for f in filters]
-                if not frame["SOPInstanceUID"]["value"] in uid:
-                    continue
-
-            index = len(self.db)
-            frame["filename"] = os.path.normpath(filename)
-            frame["index"] = index
-            self.db.insert(frame)
-
-    def has_field(self, field):
-        """ check whether a field is present """
-        cond = tinydb.where("elements")[field].exists()
-        return bool(self.db.search(cond))
-
-    def _existing(self, *items):
-        """ return frames with existing values"""
-        # query = tinydb.Query()
-        query = tinydb.where("elements")
-        condition = None
-        for item in items:
-            if not isinstance(item, str):
-                raise TypeError
-
-            elif isinstance(item, str):
-                # fields
-                field, index = _parse_field(item)
-                if index:
-                    cond = query[field].value[index].exists()
+                    frames = dicomfile.get_frames()
+                except (IOError, pydicom.errors.InvalidDicomError):
+                    # other files
+                    self.non_dicom.append(full_zfilename)
                 else:
-                    cond = query[field].value.exists()
-            else:
-                raise TypeErrorload_files
-            condition = cond if not condition else (cond & condition)
-        return self.db.search(condition)
-
-    def _filter(self, **filters):
-        """ return frames filtered by fields """
-        # query = tinydb.Query()
-        query = tinydb.where("elements")
-        condition = None
-        for name, value in filters.items():
-            field, index = _parse_field(name)
-            cond = query[field].value
-
-            if index is not None:
-                cond = cond[index]
-            if not isinstance(value, list):
-                value = [value]
-            cond = cond.one_of(value)
-            condition = cond if condition is None else (cond & condition)
-
-        return self.db.search(condition)
-
-    def _index(self, index):
-        """ return frames matching index """
-        query = tinydb.Query()
-        return self.db.get(query.index == index)
-
-    def dicomtree(self, root="."):
-        """ return serializable summary of DicomStack """
-        dicomtree = defaultdict(list)
-
-        def get(element, field):
-            field = element.get(field)
-            if not field:
-                return None
-            return field["value"]
-
-        for frame in self.frames:
-            filename = os.path.relpath(frame["filename"], start=root)
-            elements = frame["elements"]
-            dicomtree[filename].append(
-                {
-                    "study_id": get(elements, "StudyID"),
-                    "study_description": get(elements, "StudyDescription"),
-                    "study_uid": elements["StudyInstanceUID"]["value"],
-                    "series_number": get(elements, "SeriesNumber"),
-                    "series_description": get(elements, "SeriesDescription"),
-                    "series_uid": elements["SeriesInstanceUID"]["value"],
-                    "instance_uid": elements["SOPInstanceUID"]["value"],
-                }
-            )
-        # add non dicom:
-        for filename in self.non_dicom:
-            dicomtree["filename"].append({})
-
-        return dicomtree
-
-
-def get_zip_path(path):
-    """ return the zip-file root of path """
-    if not ".zip" in path:
-        return None
-    return path[: path.find(".zip") + 4]
-
-
-def _parse_field(string):
-    """ parse string with optional index suffix
-        syntax: "txt" or "txt_num"
-    """
-    split = string.split("_")
-    try:
-        field = split[0]
-        assert field.isalpha()
-    except AssertionError:
-        raise ValueError('Invalid field name in: "%s"' % string)
-
-    try:
-        index = None if len(split) == 1 else int(split[1])
-    except TypeError:
-        raise ValueError('Cannot parse index in: "%s"' % string)
-
-    return field, index
-
-
-def _get_values(frame, fields):
-    """ get DICOM element value """
-    elements = frame["elements"]
-    values = []
-    for name in fields:
-        field, index = _parse_field(name)
-        if index is not None:
-            values.append(elements[field]["value"][index])
-            continue
-        values.append(elements[field]["value"])
-    if len(fields) == 1:
-        return values[0]
-    return tuple(values)
+                    self.frames.extend(frames)
 
 
 if HAS_NUMPY:
@@ -430,13 +305,13 @@ if HAS_NUMPY:
 
         # find geometry
         nframe = len(frames)
-        first = frames[0]["elements"]
-        last = frames[-1]["elements"]
+        first = frames[0]
+        last = frames[-1]
 
-        origin = first["ImagePositionPatient"]["value"]
-        end = last["ImagePositionPatient"]["value"]
-        ax1 = tuple(first["ImageOrientationPatient"]["value"][:3])
-        ax2 = tuple(first["ImageOrientationPatient"]["value"][3:])
+        origin = first["ImagePositionPatient"]
+        end = last["ImagePositionPatient"]
+        ax1 = tuple(first["ImageOrientationPatient"][:3])
+        ax2 = tuple(first["ImageOrientationPatient"][3:])
         vec3 = [b - a for a, b in zip(origin, end)]
         norm3 = math.sqrt(sum(value ** 2 for value in vec3))
         if nframe == 1:
@@ -450,7 +325,7 @@ if HAS_NUMPY:
             ax3 = tuple(value / norm3 for value in vec3)
             spacing3 = norm3 / (nframe - 1)
         transform = (ax1, ax2, ax3)
-        spacing = first["PixelSpacing"]["value"] + (spacing3,)
+        spacing = first["PixelSpacing"] + (spacing3,)
 
         tags = {
             "origin": tuple(origin),
@@ -462,108 +337,309 @@ if HAS_NUMPY:
         slices = []
         for frame in frames:
             slope, intercept = 1, 0
-            pixels = frame["pixels"]
-            elements = frame["elements"]
+            pixels = frame.pixels
             if rescale:
-                slope = elements.get("RescaleSlope", {}).get("value", 1)
-                intercept = elements.get("RescaleSlope", {}).get("value", 0)
+                slope = frame.get("RescaleSlope", default=1)
+                intercept = frame.get("RescaleSlope", default=0)
                 pixels = pixels * slope + intercept
             slices.append(pixels)
         return DicomVolume(slices, tags).T
 
 
-def list_files(dirpath):
-    """ list all files in dirpath and its sub folders """
-    all_files = []
-    for dirpath, dirnames, filenames in os.walk(dirpath):
-        all_files.extend([os.path.join(dirpath, name) for name in filenames])
-    return all_files
+class DicomFile:
+    """ pickable DICOM file """
 
+    _dataset = None
+    _pixels = None
+    _nframe = None  # number of frames
 
-def load_dicom_frames(dataset):
-    """ load all dicom fields in dataset """
-
-    def _cast_element_value(value):
-        if isinstance(value, pydicom.multival.MultiValue):
-            # if value is an array
-            return tuple([_cast_element_value(v) for v in value])
-        elif isinstance(value, pydicom.valuerep.DSfloat):
-            # if value is defined as float
-            if value.is_integer():
-                return int(value)
-            return value.real
-        # else try force casting to int
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return str(value)
-
-    def _parse_dataelement(element):
-        if element.VR == "SQ":
-            # if element is a sequence, recurse
-            value = [_parse_dataset(d) for d in element]
+    def __init__(self, filename, bytes=None):
+        if bytes:
+            self.bytes = BytesIO(bytes)
         else:
-            # else cast to simple value
-            value = _cast_element_value(element.value)
-        return {
-            "name": str(element.name),
-            "tag": (element.tag.group, element.tag.elem),
-            "value": value,
-            "VR": str(element.VR),
-        }
+            with open(filename, "rb") as fp:
+                self.bytes = BytesIO(fp.read())
+        self.filename = filename
 
-    def _parse_dataset(dataset, root=False, flatten=False):
-        elements = {}
-        multi_frames = None
-        for element in dataset:
-            if element.keyword == "PixelData":
-                # skip
-                continue
-            elif element.keyword == "PerFrameFunctionalGroupsSequence":
-                # multi-frame DICOM
-                multi_frames = element
-            elif flatten and element.VR == "SQ":
-                # extend elements
-                for dataset in element:
-                    elements.update(_parse_dataset(dataset, flatten=True))
-            else:
-                # append to elements
-                keyword = element.keyword
-                elements[keyword] = _parse_dataelement(element)
+    # pickle
+    def __getstate__(self):
+        return (self.filename, self.bytes)
 
-        if not root:
-            # return list of elements
-            return elements
+    def __setstate__(self, state):
+        self.filename, self.bytes = state
 
-        # else, solve multi-frame case (root level only)
-        if not multi_frames:
-            # single frame
-            return [elements]
+    @property
+    def pixels(self):
+        """ retrieve pixel data """
+        if self._pixels is None:
+            if "PixelData" in self.dataset:
+                self._pixels = self.dataset.pixel_array
+        return self._pixels
 
-        # else: multiple frames
-        frames = []
-        for frame_elements in multi_frames:
-            # update elements from current frame
-            frame = dict(elements, **_parse_dataset(frame_elements, flatten=True))
-            frames.append(frame)
-        return frames
+    @property
+    def nframe(self):
+        if not self._nframe:
+            self.dataset
+        return self._nframe
 
-    frame_elements = _parse_dataset(dataset, root=True)
+    @property
+    def dataset(self):
+        """ retrieve DICOM dataset """
+        if self._dataset is None:
+            # read DicomFile
+            self.bytes.seek(0)
+            dataset = pydicom.dcmread(self.bytes)
+            # get number of frames
+            self._nframe = get_nframe(dataset)
+            self._dataset = dataset
+        return self._dataset
 
-    # pixel data
-    pixel_array = None
-    if HAS_NUMPY and "PixelData" in dataset:
-        shape = dataset.pixel_array.shape
-        # add 1st dimension if needed
-        pixel_array = dataset.pixel_array.reshape((-1, shape[-2], shape[-1]))
+    def get_frames(self):
+        """ return list of frames """
+        if not self.nframe:
+            return [DicomFrame(self)]
+        return [DicomFrame(self, index=i) for i in range(self.nframe)]
 
-    # return frames
-    frames = []
-    for i, elements in enumerate(frame_elements):
-        frame = {}
-        frame["elements"] = elements
-        if pixel_array is not None:
-            frame["pixels"] = pixel_array[i]
-        frame["dataset"] = dataset
-        frames.append(frame)
-    return frames
+    def __repr__(self):
+        repr = f"DicomFile({self.filename}"
+        if self.nframe:
+            repr += f" ({self.nframe})"
+        return repr + ")"
+
+
+class DicomFrame:
+    """ pickable DICOM frame """
+
+    def __init__(self, dicomfile, elements=None, pixels=None, index=None):
+        """
+            index: frame index in multi-frame (enhanced) DICOM
+        """
+        self.dicomfile = dicomfile
+        self.index = index
+        self._elements = elements
+        self._pixels = pixels
+
+    def __repr__(self):
+        """ represent DICOM frame """
+        if not self._elements:
+            return "DICOM frame (pending)"
+
+        repr = "DICOM frame\n"
+        for name in self.elements:
+            element = self.elements[name]
+            repr += f"{str(element):100}\n"
+        return repr
+
+    def get(self, *fields, default=None):
+        """ get values of corresponding elements """
+        values = []
+        for field in fields:
+            # parse field into name, index
+            name, index = parse_field(field)
+
+            element = self.elements.get(name)
+            if element is None:
+                return default
+            value = element.get(index)
+            if value is None:
+                return default
+            values.append(value)
+
+        if len(fields) == 1:
+            return values[0]
+        return tuple(values)
+
+    def __getitem__(self, field):
+        """ get field value """
+        value = self.get(field)
+        if value is None:
+            raise KeyError("Invalid field: %s" % field)
+        return value
+
+    @property
+    def elements(self):
+        """ retrieve DICOM field values """
+        if self._elements is None:
+            # retrieve elements from dataset
+            elements = parse_dataset(self.dicomfile.dataset, self.index)
+            self._elements = OrderedDict((e.keyword, e) for e in elements)
+        return self._elements
+
+    @property
+    def pixels(self):
+        """ retrieve pixel data """
+        if self._pixels is None:
+            # load dataset
+            pixels = self.dicomfile.pixels
+            if pixels is not None and self.index is not None:
+                pixels = pixels[self.index]
+            self._pixels = pixels
+        return self._pixels
+
+
+class DicomElement:
+    """ pickable DICOM element """
+
+    def __init__(self, element):
+        """ init DICOM element """
+        self.name = str(element.name)
+        self.keyword = str(element.keyword)
+        self.value = parse_element(element)
+        self.tag = (element.tag.group, element.tag.elem)
+        self.VR = str(element.VR)
+        self.repr = str(element)
+
+    @property
+    def sequence(self):
+        return self.VR == "SQ"
+
+    def get(self, index=None, default=None):
+        """ return value or value[index] """
+        if index is None:
+            return self.value
+
+        elif not isinstance(self.value, tuple):
+            return default
+        try:
+            return self.value[index]
+        except KeyError:
+            return default
+
+    def __getitem__(self, index):
+        """ get field value """
+        value = self.get(index)
+        if value is None:
+            raise KeyError("Invalid index: %s" % index)
+        return value
+
+    def __repr__(self):
+        """ represent DICOM element """
+        string = self.repr
+        if self.sequence:
+            for element in self.value:
+                repr_element = repr(element)
+                string += f"\n  {repr_element}"
+        return string
+
+
+def get_zip_path(path):
+    """ return the zip-file root of path """
+    if not ".zip" in path:
+        return None
+    return path[: path.find(".zip") + 4]
+
+
+def list_files(path):
+    """ list all files in path and its sub folders """
+    if os.path.isfile(path):
+        return [path]
+
+    pathes = glob.glob(str(path))
+    filenames = []
+    for _path in pathes:
+        if os.path.isfile(_path):
+            filenames.append(_path)
+            continue
+
+        # else, walk path
+        for root, _, files in os.walk(_path):
+            filenames.extend([os.path.join(root, name) for name in files])
+    return filenames
+
+
+def parse_field(string):
+    """ parse string with optional index suffix
+        syntax: "txt" or "txt_num"
+    """
+    split = string.split("_")
+    try:
+        field = split[0]
+        assert field.isalpha()
+    except AssertionError:
+        raise ValueError('Invalid field name in: "%s"' % string)
+
+    try:
+        index = None if len(split) == 1 else int(split[1])
+    except TypeError:
+        raise ValueError('Cannot parse index in: "%s"' % string)
+
+    return field, index
+
+
+def parse_element(element):
+    """ cast raw value """
+    if not element.value:
+        return element.value
+
+    elif element.VR == "SQ":
+        sequence = []
+        for d in element:
+            sequence.extend(parse_dataset(d))
+        return sequence
+
+    elif element.VR == "UI":
+        return str(element.value)
+
+    elif element.VR == "DA":
+        # date
+        fmt = "%Y%m%d"
+        return datetime.datetime.strptime(element.value, fmt).date().isoformat()
+
+    elif element.VR == "TM":
+        # time
+        if "." in element.value:
+            fmt = "%H%M%S.%f"
+        else:
+            fmt = "%H%M%S"
+        return datetime.datetime.strptime(element.value, fmt).time().isoformat()
+    else:
+        # other: string, int or float
+        return cast(element.value)
+
+
+def cast(value):
+    """ cast DICOM value type """
+
+    if isinstance(value, pydicom.multival.MultiValue):
+        # if value is an array
+        return tuple([cast(v) for v in value])
+
+    elif isinstance(value, pydicom.valuerep.DSfloat):
+        # if value is defined as float
+        if value.is_integer():
+            return int(value)
+        return value.real
+    # else try force casting to int
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def parse_dataset(dataset, index=None, flatten=False):
+    """ parse dataset to retrieve elements """
+    elements = []
+    for element in dataset:
+        if element.keyword == "PixelData":
+            # skip pixel data
+            continue
+        elif element.keyword == "PerFrameFunctionalGroupsSequence":
+            # multi-frame DICOM
+            elements.extend(parse_dataset(element[index], flatten=True))
+        elif flatten and element.VR == "SQ":
+            # extend elements
+            for _dataset in element:
+                elements.extend(parse_dataset(_dataset, flatten=True))
+        else:
+            # append to elements
+            elements.append(DicomElement(element))
+    return elements
+
+
+def get_nframe(dataset):
+    """ return number of frames if several """
+    frames = getattr(dataset, "PerFrameFunctionalGroupsSequence", None)
+    if frames:
+        return len(frames)
+    # else
+    return None
