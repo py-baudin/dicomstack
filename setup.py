@@ -7,7 +7,7 @@ setup(
     name="dicomstack",
     version=__version__,
     packages=find_packages(),
-    install_requires=["pydicom>=1.0", "tinydb>=3.11"],
+    install_requires=["pydicom>=1.0"],
     entry_points={"console_scripts": ["dicom = dicomstack.cli:cli"]},
     # metadata for upload to PyPI
     author="Pierre-Yves Baudin",
