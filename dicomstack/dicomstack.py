@@ -9,6 +9,7 @@ import functools
 from io import BytesIO
 from collections import OrderedDict
 import zipfile
+import logging
 import pydicom
 
 try:
@@ -18,6 +19,8 @@ try:
 except ImportError:
     # no pixel array support
     HAS_NUMPY = False
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DicomStack(object):
@@ -354,10 +357,12 @@ class DicomFile:
     _nframe = None  # number of frames
 
     def __init__(self, filename, bytes=None):
+        """ init DicomFile object """
         if bytes:
             self.bytes = BytesIO(bytes)
         else:
             with open(filename, "rb") as fp:
+                LOGGER.info(f"Reading file: '{filename}'")
                 self.bytes = BytesIO(fp.read())
         self.filename = filename
 
@@ -372,27 +377,32 @@ class DicomFile:
     def pixels(self):
         """ retrieve pixel data """
         if self._pixels is None:
-            if "PixelData" in self.dataset:
-                self._pixels = self.dataset.pixel_array
+            if not "PixelData" in self.dataset:
+                self._load_dataset(load_pixels=True)
+            self._pixels = self.dataset.pixel_array
         return self._pixels
 
     @property
     def nframe(self):
         if not self._nframe:
-            self.dataset
+            self._load_dataset()
         return self._nframe
 
     @property
     def dataset(self):
         """ retrieve DICOM dataset """
         if self._dataset is None:
-            # read DicomFile
-            self.bytes.seek(0)
-            dataset = pydicom.dcmread(self.bytes)
-            # get number of frames
-            self._nframe = get_nframe(dataset)
-            self._dataset = dataset
+            self._load_dataset()
         return self._dataset
+
+    def _load_dataset(self, load_pixels=False):
+        LOGGER.info(
+            f"Loading dataset from: '{self.filename}' (load pixels: {load_pixels})"
+        )
+        self.bytes.seek(0)
+        dataset = pydicom.dcmread(self.bytes, stop_before_pixels=not load_pixels)
+        self._nframe = get_nframe(dataset)
+        self._dataset = dataset
 
     def get_frames(self):
         """ return list of frames """
@@ -461,6 +471,7 @@ class DicomFrame:
         """ retrieve DICOM field values """
         if self._elements is None:
             # retrieve elements from dataset
+            LOGGER.info(f"Loading DICOM elements from: '{self.dicomfile.filename}'")
             elements = parse_dataset(self.dicomfile.dataset, self.index)
             self._elements = OrderedDict((e.keyword, e) for e in elements)
         return self._elements
