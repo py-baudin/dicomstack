@@ -22,6 +22,9 @@ except ImportError:
 
 LOGGER = logging.getLogger(__name__)
 
+# exceptions
+InvalidDicomError = pydicom.errors.InvalidDicomError
+
 
 class DicomStack(object):
     """ load, sort and filter DICOM images
@@ -33,11 +36,13 @@ class DicomStack(object):
             * a file (or a list of)
             * a zip file
         """
+
         self.frames = []
         self.non_dicom = []
 
         if not filenames and not path:
             # empty stack
+            LOGGER.info("New DICOM stack (empty)")
             return
 
         elif not filenames:
@@ -48,15 +53,18 @@ class DicomStack(object):
             filenames = [filenames]
 
         # load dicom files
+        LOGGER.info("New DICOM stack (from %s files)" % len(filenames))
         self._load_files(filenames)
 
     @classmethod
     def from_frames(cls, frames):
         """ create a new stack from list of frames """
+        LOGGER.debug("New DICOM stack (from %s frames)" % len(frames))
         if not all([isinstance(frame, DicomFrame) for frame in frames]):
             raise TypeError
-        stack = cls()
-        stack.frames = frames
+        stack = cls.__new__(cls)
+        stack.frames = list(frames)
+        stack.non_dicom = []
         return stack
 
     def __len__(self):
@@ -81,6 +89,8 @@ class DicomStack(object):
 
     @property
     def dicomtree(self):
+        LOGGER.info("Make dicom tree")
+
         def _describe(frame):
             return {
                 # UID and number
@@ -131,16 +141,19 @@ class DicomStack(object):
 
     def filter_by_field(self, **filters):
         """ return a sub stack with matching values for the given field """
+        LOGGER.debug("Filter by fields: %s" % str(filters))
         frames = self._filter(**filters)
         return self.from_frames(frames)
 
     def get_field_values(self, *fields):
         """ return a list a values for the given fields """
+        LOGGER.debug("Get fields' values: %s" % str(fields))
         frames = self._existing(*fields)
         return [frame.get(*fields) for frame in frames]
 
     def sort(self, *fields):
         """ reindex database using field values """
+        LOGGER.debug("Sort by fields: %s" % str(fields))
         frames = self._existing(*fields)
         sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
         return self.from_frames(sorted_frames)
@@ -153,6 +166,7 @@ class DicomStack(object):
         """ as volume """
         if not HAS_NUMPY:
             raise NotImplementedError("numpy is required")
+        LOGGER.debug("Make volume (use fields: %s)" % str(by))
 
         # sort by position
         if self.has_field("InStackPositionNumber"):
@@ -234,12 +248,12 @@ class DicomStack(object):
 
     def _load_file(self, filename):
         """ load single Dicom file """
-        # read dicom object
-        dicomfile = DicomFile(filename)
 
         try:
+            # read dicom object
+            dicomfile = DicomFile(filename)
             frames = dicomfile.get_frames()
-        except (IOError, pydicom.errors.InvalidDicomError):
+        except (IOError, InvalidDicomError):
             # other files
             self.non_dicom.append(filename)
         else:
@@ -262,12 +276,11 @@ class DicomStack(object):
                 if not filename in full_zfilename:
                     continue
 
-                # read dicom object
-                dicomfile = DicomFile(full_zfilename, bytes=zf.read(zfile))
-
                 try:
+                    # read dicom object
+                    dicomfile = DicomFile(full_zfilename, bytes=zf.read(zfile))
                     frames = dicomfile.get_frames()
-                except (IOError, pydicom.errors.InvalidDicomError):
+                except (IOError, InvalidDicomError):
                     # other files
                     self.non_dicom.append(full_zfilename)
                 else:
@@ -358,12 +371,14 @@ class DicomFile:
 
     def __init__(self, filename, bytes=None):
         """ init DicomFile object """
-        if bytes:
-            self.bytes = BytesIO(bytes)
-        else:
+        if not bytes:
+            # load filename
+            if not pydicom.misc.is_dicom(filename):
+                raise InvalidDicomError("Invalid DICOM file: %s" % filename)
             with open(filename, "rb") as fp:
-                LOGGER.info(f"Reading file: '{filename}'")
-                self.bytes = BytesIO(fp.read())
+                bytes = fp.read()
+
+        self.bytes = bytes
         self.filename = filename
 
     # pickle
@@ -396,11 +411,10 @@ class DicomFile:
         return self._dataset
 
     def _load_dataset(self, load_pixels=False):
-        LOGGER.info(
-            f"Loading dataset from: '{self.filename}' (load pixels: {load_pixels})"
+        """ parse DICOM object stored in bytes """
+        dataset = pydicom.dcmread(
+            BytesIO(self.bytes), stop_before_pixels=not load_pixels
         )
-        self.bytes.seek(0)
-        dataset = pydicom.dcmread(self.bytes, stop_before_pixels=not load_pixels)
         self._nframe = get_nframe(dataset)
         self._dataset = dataset
 
@@ -471,7 +485,6 @@ class DicomFrame:
         """ retrieve DICOM field values """
         if self._elements is None:
             # retrieve elements from dataset
-            # LOGGER.info(f"Loading DICOM elements from: '{self.dicomfile.filename}'")
             elements = parse_dataset(self.dicomfile.dataset, self.index)
             self._elements = OrderedDict((e.keyword, e) for e in elements)
         return self._elements
