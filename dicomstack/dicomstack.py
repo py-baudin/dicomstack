@@ -12,13 +12,7 @@ import zipfile
 import logging
 import pydicom
 
-try:
-    import numpy
-
-    HAS_NUMPY = True
-except ImportError:
-    # no pixel array support
-    HAS_NUMPY = False
+from . import pixeldata
 
 LOGGER = logging.getLogger(__name__)
 
@@ -162,10 +156,9 @@ class DicomStack(object):
         """ return True if all frame have the given field """
         return all(frame.get(field) is not None for frame in self.frames)
 
+    @pixeldata.available
     def as_volume(self, by=None, rescale=True):
         """ as volume """
-        if not HAS_NUMPY:
-            raise NotImplementedError("numpy is required")
         LOGGER.debug("Make volume (use fields: %s)" % str(by))
 
         # sort by position
@@ -173,12 +166,14 @@ class DicomStack(object):
             stack = self.sort("InStackPositionNumber")
         elif self.has_field("SliceLocation"):
             stack = self.sort("SliceLocation")
+        elif self.has_field("AcquisitionNumber"):
+            stack = self.sort("AcquisitionNumber")
         else:
             raise NotImplementedError("Could not defined sorting method")
 
         if not by:
             # single non-indexed volume
-            return _make_volume(stack.frames, rescale=rescale)
+            return pixeldata.make_volume(stack.frames, rescale=rescale)
 
         # else: indexed volumes
 
@@ -200,7 +195,8 @@ class DicomStack(object):
         volumes = []
         for filter in filters:
             substack = stack.filter_by_field(**filter)
-            volumes.append(_make_volume(substack.frames, rescale=rescale))
+            volume = pixeldata.make_volume(substack.frames, rescale=rescale)
+            volumes.append(volume)
         return indices, volumes
 
     def _existing(self, *fields):
@@ -261,6 +257,7 @@ class DicomStack(object):
 
     def _load_zipfile(self, filename):
         """ load files in zipfile"""
+        filename = str(filename)
         zip_path = get_zip_path(filename)
         if not zipfile.is_zipfile(zip_path):
             self.non_dicom.append(filename)
@@ -285,81 +282,6 @@ class DicomStack(object):
                     self.non_dicom.append(full_zfilename)
                 else:
                     self.frames.extend(frames)
-
-
-if HAS_NUMPY:
-
-    class DicomVolume(numpy.ndarray):
-        """ simple layer over numpy ndarray to add attribute: volume.info
-        """
-
-        def __new__(cls, input_array, tags=None):
-            """ create Volume object """
-            # copy the data
-            obj = numpy.asarray(input_array).view(cls)
-            obj.tags = tags
-            return obj
-
-        def __array_finalize__(self, obj):
-            if obj is None:
-                return
-            self.tags = getattr(obj, "tags", {})
-
-        def __array_wrap__(self, out_arr, context=None):
-            """ propagate metadata if wrap is called """
-            return super().__array_wrap__(self, out_arr, context)
-
-        def __array_wrap__(self, out_arr, context=None):
-            if self.shape != out_arr.shape:
-                # if not same shape: drop metadata
-                return out_arr
-            # else wrap out_array
-            return numpy.ndarray.__array_wrap__(self, out_arr, context)
-
-    def _make_volume(frames, rescale=True):
-        """ return volume from a sequence of frames"""
-
-        # find geometry
-        nframe = len(frames)
-        first = frames[0]
-        last = frames[-1]
-
-        origin = first["ImagePositionPatient"]
-        end = last["ImagePositionPatient"]
-        ax1 = tuple(first["ImageOrientationPatient"][:3])
-        ax2 = tuple(first["ImageOrientationPatient"][3:])
-        vec3 = [b - a for a, b in zip(origin, end)]
-        norm3 = math.sqrt(sum(value ** 2 for value in vec3))
-        if nframe == 1:
-            ax3 = (
-                ax1[1] * ax2[2] - ax1[2] * ax2[1],
-                ax1[2] * ax2[0] - ax1[0] * ax2[2],
-                ax1[0] * ax2[1] - ax1[1] * ax2[0],
-            )
-            spacing3 = 1
-        else:
-            ax3 = tuple(value / norm3 for value in vec3)
-            spacing3 = norm3 / (nframe - 1)
-        transform = (ax1, ax2, ax3)
-        spacing = first["PixelSpacing"] + (spacing3,)
-
-        tags = {
-            "origin": tuple(origin),
-            "spacing": tuple(spacing),
-            "transform": tuple(transform),
-        }
-
-        # make volume
-        slices = []
-        for frame in frames:
-            slope, intercept = 1, 0
-            pixels = frame.pixels
-            if rescale:
-                slope = frame.get("RescaleSlope", default=1)
-                intercept = frame.get("RescaleSlope", default=0)
-                pixels = pixels * slope + intercept
-            slices.append(pixels)
-        return DicomVolume(slices, tags).T
 
 
 class DicomFile:
@@ -548,6 +470,7 @@ class DicomElement:
 
 def get_zip_path(path):
     """ return the zip-file root of path """
+    path = str(path)
     if not ".zip" in path:
         return None
     return path[: path.find(".zip") + 4]

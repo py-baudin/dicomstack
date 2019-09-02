@@ -1,14 +1,14 @@
-""" DICOM tools cli """
+""" DICOM utils cli """
 # coding=utf-8
 import os
 import argparse
 
-from . import tools
+from . import utils
 
 
 def cli():
 
-    parser = argparse.ArgumentParser("dicom", description="Various DICOM tools")
+    parser = argparse.ArgumentParser("dicom", description="Various DICOM utils")
 
     subparser = parser.add_subparsers()
     parser_anonymize = subparser.add_parser(
@@ -46,10 +46,10 @@ def run_anonymize(args):
     overwrite = args.overwrite
 
     if os.path.isfile(src):
-        filename = tools.anonymize_file(src, dest, filename=name, overwrite=overwrite)
+        filename = utils.anonymize_file(src, dest, filename=name, overwrite=overwrite)
         files = [filename]
     else:
-        files = tools.anonymize_stack(src, dest, prefix=name, overwrite=overwrite)
+        files = utils.anonymize_stack(src, dest, prefix=name, overwrite=overwrite)
 
     print("The following files were anonymized:")
     for filename in files:

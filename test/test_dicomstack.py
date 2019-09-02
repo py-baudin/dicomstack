@@ -11,17 +11,12 @@ import numpy as np
 from os.path import dirname, join
 from dicomstack import dicomstack
 
-
 DATA_DIR = join(dirname(dirname(dicomstack.__file__)), "data")
 
-""" TODO
-    synthetic dummy data
-"""
 
-
-def test_dicomfile_single():
+def test_dicomfile_single(legsfile):
     # single slice DICOM
-    path = join(DATA_DIR, "avanto_T1w", "file1")
+    path = legsfile
     dcmfile = dicomstack.DicomFile(path)
     assert dcmfile._pixels is None
     assert dcmfile._dataset is None
@@ -41,26 +36,26 @@ def test_dicomfile_single():
     assert frame.pixels.ndim == 2
 
     # test element
-    element = frame.elements["ManufacturerModelName"]
-    assert element.name == "Manufacturer's Model Name"
-    assert element.VR == "LO"
-    assert element.tag == (0x0008, 0x1090)
-    assert element.get() == "Avanto"
+    element = frame.elements["Modality"]
+    assert element.name == "Modality"
+    assert element.VR == "CS"
+    assert element.tag == (0x0008, 0x0060)
 
     element = frame.elements["ImageType"]
     assert element.get()[0] == "ORIGINAL"
     assert element.get(0) == "ORIGINAL"
 
     # test frame.get
+    assert frame.get("Modality") == "MR"
     assert frame.get("Manufacturer") == "SIEMENS"
-    assert frame.get("Manufacturer", "ManufacturerModelName") == ("SIEMENS", "Avanto")
+    assert frame.get("Modality", "Manufacturer") == ("MR", "SIEMENS")
     assert frame.get("ImageType")[0] == "ORIGINAL"
     assert frame.get("ImageType_0") == "ORIGINAL"
 
 
-def test_dicomfile_multi():
+def test_dicomfile_multi(multi):
     # enhanced DICOM
-    path = join(DATA_DIR, "ingenia_multiecho_enhanced", "file2")
+    path = multi
     dcmfile = dicomstack.DicomFile(path)
     assert dcmfile._pixels is None
     assert dcmfile._dataset is None
@@ -118,10 +113,10 @@ def test_dicomstack_empty():
     assert not stack
 
 
-def test_dicomstack_single():
+def test_dicomstack_single(legsfile):
     """ test DicomStack with single file """
-    # Avanto T1w
-    path = join(DATA_DIR, "avanto_T1w")
+
+    path = legsfile
     stack = dicomstack.DicomStack(path)
 
     # check attributes
@@ -136,18 +131,18 @@ def test_dicomstack_single():
     assert stack.frames[0].elements["Manufacturer"].VR == "LO"
 
     # get field values
-    assert stack.get_field_values("MagneticFieldStrength") == [1.5]
-    assert stack["MagneticFieldStrength"] == [1.5]
-    assert stack["Manufacturer", "ManufacturerModelName"] == [("SIEMENS", "Avanto")]
+    assert stack.get_field_values("Modality") == ["MR"]
+    assert stack["Modality"] == ["MR"]
+    assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
     assert stack["ImageType_0"] == ["ORIGINAL"]
 
     # unique
-    assert stack.single("Manufacturer") == "SIEMENS"
-    assert stack.unique("Manufacturer") == ["SIEMENS"]
+    assert stack.single("Modality") == "MR"
+    assert stack.unique("Modality") == ["MR"]
 
     # filter by fields
-    assert not stack.filter_by_field(MagneticFieldStrength=3)
-    assert stack(MagneticFieldStrength=1.5)
+    assert not stack.filter_by_field(Modality="FOOBAR")
+    assert stack(Modality="MR")
 
     # convert to volume
     volume = stack.as_volume()
@@ -174,20 +169,19 @@ def test_dicomstack_single():
     assert tree2 == tree
 
 
-def test_dicomstack_zipped():
+def test_dicomstack_zipped(legszip):
     # zipped Signa T1w
-    path = join(DATA_DIR, "signa_T1w.zip")
+    # path = join(DATA_DIR, "signa_T1w.zip")
+    path = legszip
     stack = dicomstack.DicomStack(path)
     assert stack
     assert len(stack) == 1
-    assert stack["Manufacturer", "ManufacturerModelName"] == [
-        ("GE MEDICAL SYSTEMS", "Signa HDxt")
-    ]
+    assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
 
 
-def test_dicomstack_multi():
+def test_dicomstack_multi(multi):
     # ingenia Multi echo
-    path = join(DATA_DIR, "ingenia_multiecho_enhanced")
+    path = multi
     stack = dicomstack.DicomStack(path)
     assert stack
     assert len(stack) == 90
