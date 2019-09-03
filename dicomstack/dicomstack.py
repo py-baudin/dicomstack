@@ -57,7 +57,7 @@ class DicomStack(object):
         """ create a new stack from list of frames """
         LOGGER.debug("New DICOM stack (from %s frames)" % len(frames))
         if not all([isinstance(frame, DicomFrame) for frame in frames]):
-            raise TypeError("Invalid DicomFrame in %s" %frames)
+            raise TypeError("Invalid DicomFrame in %s" % frames)
         stack = cls.__new__(cls)
         stack.frames = list(frames)
         stack.non_dicom = []

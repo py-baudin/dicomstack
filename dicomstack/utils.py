@@ -106,7 +106,7 @@ def write_dataset(
     file_meta.MediaStorageSOPInstanceUID = "1.2.3"
     file_meta.ImplementationClassUID = "1.2.3.4"
 
-    ds = pydicom.FileDataset(
+    dataset = pydicom.FileDataset(
         filename, dataset, file_meta=file_meta, preamble=b"\0" * 128
     )
 
@@ -116,7 +116,7 @@ def write_dataset(
         LOGGER.debug("Setting file extension to: %s", ext)
         basename = os.path.splitext(filename)[0]
         filename = basename + ext
-    ds.save_as(filename, write_like_original=False)
+    dataset.save_as(filename, write_like_original=False)
 
 
 def update_dataset(dataset, data=None, dtype="uint16", **tags):
@@ -130,7 +130,7 @@ def update_dataset(dataset, data=None, dtype="uint16", **tags):
 
 def make_dataset(data, dtype="uint16", **tags):
     """ make valid DICOM dataset """
-    ds = pydicom.Dataset()
+    dataset = pydicom.Dataset()
 
     # date time
     LOGGER.debug("Setting dataset values.")
@@ -201,19 +201,24 @@ def make_dataset(data, dtype="uint16", **tags):
     for name, value in tags.items():
         # check tag
         if isinstance(value, pydicom.DataElement):
-            ds.add(value)
+            element = value
         else:
-            setattr(ds, name, value)
+            tag = pydicom.dataset.tag_for_keyword(name)
+            if not tag:
+                raise ValueError("Invalid DICOM keyword: %s" % name)
+            vr = pydicom.dataset.dictionary_VR(tag)
+            element = pydicom.DataElement(tag, vr, value)
+        dataset.add(element)
 
     # Set the transfer syntax
-    ds.is_little_endian = True
-    ds.is_implicit_VR = True
+    dataset.is_little_endian = True
+    dataset.is_implicit_VR = True
 
     # Set creation date/time
-    ds.ContentDate = now.strftime("%Y%m%d")
-    ds.ContentTime = now.strftime("%H%M%S.%f")
+    dataset.ContentDate = now.strftime("%Y%m%d")
+    dataset.ContentTime = now.strftime("%H%M%S.%f")
 
     # set pixel's data
-    ds.PixelData = data
+    dataset.PixelData = data
 
-    return ds
+    return dataset

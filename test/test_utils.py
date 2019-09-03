@@ -10,6 +10,16 @@ from os.path import join, dirname
 from dicomstack import utils, dicomstack
 
 
+def test_make_dataset():
+    """ test creating dataset """
+    data = np.arange(3 * 4, dtype="uint8").reshape((3, 4))
+    ds = utils.make_dataset(data, PatientName="Foo Bar")
+    assert ds.PatientName == "Foo Bar"
+
+    with pytest.raises(ValueError):
+        utils.make_dataset(data, BadTag="Foo Bar")
+
+
 def test_write_dataset(tmpdir):
     """ test writing dicom file """
     filename = tmpdir.join("test.dcm")
@@ -17,9 +27,9 @@ def test_write_dataset(tmpdir):
     utils.write_dataset(data, filename)
 
     # load for testing
-    dcm = pydicom.dcmread(str(filename))
-    assert dcm.PatientName == "Anonymous"
-    assert np.all(dcm.pixel_array == data)
+    ds = pydicom.dcmread(str(filename))
+    assert ds.PatientName == "Anonymous"
+    assert np.all(ds.pixel_array == data)
 
 
 def test_update_dataset(brain, tmpdir):
@@ -29,10 +39,10 @@ def test_update_dataset(brain, tmpdir):
     utils.write_dataset(data, filename, dataset=brain, PatientName="Foo^Bar")
 
     # check values
-    dcm = pydicom.dcmread(str(filename))
-    assert dcm.StudyDescription == "BRAIN"  # original tag
-    assert dcm.PatientName == "Foo^Bar"  # updated tag
-    assert np.all(dcm.pixel_array == data)
+    ds = pydicom.dcmread(str(filename))
+    assert ds.StudyDescription == "BRAIN"  # original tag
+    assert ds.PatientName == "Foo^Bar"  # updated tag
+    assert np.all(ds.pixel_array == data)
 
 
 def test_anonymize_file(tmpdir, legsfile):
