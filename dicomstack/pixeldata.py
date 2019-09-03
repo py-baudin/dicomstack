@@ -105,28 +105,27 @@ if AVAILABLE:
 
 
 @available
-def update_dataset(dataset, data, dtype="uint8"):
-    """ update dataset with data array characteristics """
+def format_pixels(data, dtype="uint8"):
+    """ make tags from ndarray """
+    tags = {}
     data = np.asarray(data)
 
-    if not isinstance(data, np.ndarray):
-        raise ValueError("passed data must be a np array")
     if data.ndim != 2:
         raise ValueError("Invalid data shape: %s", data.shape)
 
     # shape
     rows, cols = data.shape
-    dataset.Rows = rows
-    dataset.Columns = cols
+    tags["Rows"] = rows
+    tags["Columns"] = cols
 
     # geometry
     volumetags = getattr(data, "tags", {})
     origin = volumetags.get("origin", (0, 0, 0))
     spacing = volumetags.get("spacing", (1, 1, 1))
     transform = volumetags.get("spacing", [(1, 0, 0), (0, 1, 0), (0, 0, 1)])
-    dataset.PixelSpacing = list(spacing[:2])
-    dataset.ImagePositionPatient = list(origin)
-    dataset.ImageOrientationPatient = list(transform[0]) + list(transform[1])
+    tags["PixelSpacing"] = list(spacing[:2])
+    tags["ImagePositionPatient"] = list(origin)
+    tags["ImageOrientationPatient"] = list(transform[0]) + list(transform[1])
 
     # dynamics
     data_max = data.max()
@@ -140,19 +139,20 @@ def update_dataset(dataset, data, dtype="uint8"):
         # stored = (data - intercept) / slope
         slope = (data_max - data_min) / (max_val - min_val)
         intercept = data_min - min_val * slope
-        dataset.RescaleSlope = slope
-        dataset.RescaleIntercept = intercept
+        tags["RescaleSlope"] = slope
+        tags["RescaleIntercept"] = intercept
         data = ((data - intercept) / slope).astype(reftype)
 
     # data type
     if np.issubsctype(data, np.signedinteger):
-        dataset.PixelRepresentation = 1
+        tags["PixelRepresentation"] = 1
     elif np.issubsctype(data, np.unsignedinteger):
-        dataset.PixelRepresentation = 0
+        tags["PixelRepresentation"] = 0
     else:
         raise ValueError("Invalid data type: %s", data.dtype)
-    dataset.BitsAllocated = data.itemsize * 8
-    dataset.SamplesPerPixel = 1
+    tags["BitsAllocated"] = data.itemsize * 8
+    tags["BitsStored"] = data.itemsize * 8
+    tags["SamplesPerPixel"] = 1
 
-    # save pixels
-    dataset.PixelData = data.tobytes()
+    # return tags
+    return tags, data.tobytes()

@@ -35,7 +35,7 @@ def legs(legsfile):
 def legszip(legsfile, tmpdir):
     dest = tmpdir.join("legs.zip")
     with zipfile.ZipFile(dest, "w") as zf:
-        zf.write(legsfile)
+        zf.write(legsfile, arcname="LEGS.DCM")
     return dest
 
 

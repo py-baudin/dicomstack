@@ -33,6 +33,7 @@ class DicomStack(object):
 
         self.frames = []
         self.non_dicom = []
+        self.root = None
 
         if not filenames and not path:
             # empty stack
@@ -41,7 +42,8 @@ class DicomStack(object):
 
         elif not filenames:
             # search path
-            filenames = list_files(path)
+            root, filenames = list_files(path)
+            self.root = root
 
         elif not isinstance(filenames, (list, tuple)):
             filenames = [filenames]
@@ -51,7 +53,7 @@ class DicomStack(object):
         self._load_files(filenames)
 
     @classmethod
-    def from_frames(cls, frames):
+    def from_frames(cls, frames, root=None):
         """ create a new stack from list of frames """
         LOGGER.debug("New DICOM stack (from %s frames)" % len(frames))
         if not all([isinstance(frame, DicomFrame) for frame in frames]):
@@ -59,6 +61,7 @@ class DicomStack(object):
         stack = cls.__new__(cls)
         stack.frames = list(frames)
         stack.non_dicom = []
+        stack.root = root
         return stack
 
     def __len__(self):
@@ -79,7 +82,12 @@ class DicomStack(object):
     @property
     def filenames(self):
         """ return list of dicom files """
-        return [frame.dicomfile.filename for frame in self.frames]
+        if not self.root:
+            return [frame.dicomfile.filename for frame in self.frames]
+        return [
+            os.path.relpath(frame.dicomfile.filename, self.root)
+            for frame in self.frames
+        ]
 
     @property
     def dicomtree(self):
@@ -120,11 +128,13 @@ class DicomStack(object):
             items = [items]
         return self.get_field_values(*items)
 
-    def single(self, *fields):
+    def single(self, *fields, default=...):
         """ return single value for field """
         values = list(set(self.get_field_values(*fields)))
         if len(values) > 1:
             raise ValueError("Multiple values found for %s" % fields)
+        elif not values and default is not ...:
+            return default
         elif not values:
             raise ValueError("No value found for %s" % fields)
         return values[0]
@@ -137,7 +147,7 @@ class DicomStack(object):
         """ return a sub stack with matching values for the given field """
         LOGGER.debug("Filter by fields: %s" % str(filters))
         frames = self._filter(**filters)
-        return self.from_frames(frames)
+        return self.from_frames(frames, root=self.root)
 
     def get_field_values(self, *fields):
         """ return a list a values for the given fields """
@@ -150,7 +160,7 @@ class DicomStack(object):
         LOGGER.debug("Sort by fields: %s" % str(fields))
         frames = self._existing(*fields)
         sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
-        return self.from_frames(sorted_frames)
+        return self.from_frames(sorted_frames, root=self.root)
 
     def has_field(self, field):
         """ return True if all frame have the given field """
@@ -162,7 +172,11 @@ class DicomStack(object):
         LOGGER.debug("Make volume (use fields: %s)" % str(by))
 
         # sort by position
-        if self.has_field("InStackPositionNumber"):
+        if len(self) == 0:
+            return None
+        elif len(self) == 1:
+            stack = self
+        elif self.has_field("InStackPositionNumber"):
             stack = self.sort("InStackPositionNumber")
         elif self.has_field("SliceLocation"):
             stack = self.sort("SliceLocation")
@@ -244,10 +258,15 @@ class DicomStack(object):
 
     def _load_file(self, filename):
         """ load single Dicom file """
+        root = self.root
+        if root:
+            filepath = os.path.join(root, filename)
+        else:
+            filepath = str(filename)
 
         try:
             # read dicom object
-            dicomfile = DicomFile(filename)
+            dicomfile = DicomFile(filepath)
             frames = dicomfile.get_frames()
         except (IOError, InvalidDicomError):
             # other files
@@ -257,8 +276,13 @@ class DicomStack(object):
 
     def _load_zipfile(self, filename):
         """ load files in zipfile"""
-        filename = str(filename)
-        zip_path = get_zip_path(filename)
+        root = self.root
+        if root:
+            filepath = os.path.join(root, filename)
+        else:
+            filepath = str(filename)
+
+        zip_path = get_zip_path(filepath)
         if not zipfile.is_zipfile(zip_path):
             self.non_dicom.append(filename)
 
@@ -479,19 +503,16 @@ def get_zip_path(path):
 def list_files(path):
     """ list all files in path and its sub folders """
     if os.path.isfile(path):
-        return [path]
-
-    pathes = glob.glob(str(path))
+        return os.path.dirname(path), [os.path.basename(path)]
+    # pathes = glob.glob(str(path))
     filenames = []
-    for _path in pathes:
-        if os.path.isfile(_path):
-            filenames.append(_path)
-            continue
-
-        # else, walk path
-        for root, _, files in os.walk(_path):
-            filenames.extend([os.path.join(root, name) for name in files])
-    return filenames
+    # walk path
+    for root, _, files in os.walk(path):
+        root = os.path.relpath(root, path)
+        if root == ".":
+            root = ""
+        filenames.extend([os.path.join(root, name) for name in files])
+    return path, filenames
 
 
 def parse_field(string):

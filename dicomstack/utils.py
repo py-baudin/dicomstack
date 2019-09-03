@@ -128,60 +128,76 @@ def update_dataset(dataset, data=None, dtype="uint16", **tags):
     return make_dataset(data, dtype=dtype, **newtags)
 
 
-def make_dataset(
-    data,
-    dtype="uint16",
-    PatientName="Anonymous",
-    PatientID="",
-    PatientSex="O",
-    PatientBirthDate="",
-    PatientOrientation="FFS",
-    ReferringPhysicianName="",
-    StudyDate=None,  # now
-    StudyTime=None,  # now
-    StudyID="",
-    StudyUID=None,
-    SeriesNumber=1,
-    SeriesUID=None,
-    InstanceNumber=1,
-    **tags,
-):
+def make_dataset(data, dtype="uint16", **tags):
+    """ make valid DICOM dataset """
     ds = pydicom.Dataset()
 
     # date time
     LOGGER.debug("Setting dataset values.")
     now = datetime.datetime.now()
 
-    # default values
-    if not StudyDate:
-        StudyDate = now.strftime("%Y%m%d")
-    if not StudyTime:
-        StudyTime = now.strftime("%H%M%S.%f")
-    if not SeriesUID:
-        SeriesUID = str(uuid.uuid4())
-    if not StudyUID:
-        StudyUID = str(uuid.uuid4())
+    def default(name, value):
+        # set default value in tags
+        if tags.get(name):
+            return
+        tags[name] = value
 
-    # Add the data elements
-    tags.update(
-        {
-            "PatientName": PatientName,
-            "PatientID": PatientID,
-            "PatientSex": PatientSex,
-            "PatientBirthDate": PatientBirthDate,
-            "PatientOrientation": PatientOrientation,
-            "ReferringPhysicianName": ReferringPhysicianName,
-            "ds.StudyDate": StudyDate,
-            "ds.StudyTime": StudyTime,
-            "ds.SeriesUID": SeriesUID,
-            "ds.SeriesNumber": SeriesNumber,
-            "ds.StudyID": StudyID,
-            "ds.StudyUID": StudyUID,
-            "ds.InstanceNumber": InstanceNumber,
-        }
-    )
+    # set required tags
+    # patient
+    default("PatientName", "Anonymous")
+    default("PatientID", "")
+    default("PatientSex", "O")
+    default("PatientBirthDate", "")
+    default("PatientOrientation", "FFS")
+    default("ReferringPhysicianName", "")
+    # material
+    default("Modality", "MR")
+    default("Manufacturer", "")
+    # reference
+    # default("FrameOfReferenceUID", None)
+    # default("PositionReferenceIndicator", None)
+    # geometry
+    default("PixelSpacing", [1, 1])  # overwritten with data's metadata
+    default("SliceThickness", 1)
+    default("ImageOrientationPatient", [1, 0, 0, 0, 1, 0, 0, 0, 1])
+    default("ImagePositionPatient", [0, 0, 0])
+    # MR image
+    default("PhotometricInterpretation", "MONOCHROME1")
+    default("ImageType", ["DERIVED", "PRIMARY"])
+    default("ScanningSequence", "RM")
+    default("SequenceVariant", "NONE")
+    # study
+    default("StudyDate", now.strftime("%Y%m%d"))
+    default("StudyTime", now.strftime("%H%M%S.%f"))
+    default("StudyID", "")
+    default("StudyInstanceUID", str(uuid.uuid4()))
+    # series
+    default("SeriesNumber", 1)
+    default("SeriesInstanceUID", str(uuid.uuid4()))
+    default("AccessionNumber", "")
+    default("InstanceNumber", 1)
 
-    # set other tags
+    # data
+    if not isinstance(data, bytes):
+        try:
+            _tags, data = pixeldata.format_pixels(data, dtype=dtype)
+        except (NotImplementedError, TypeError):
+            raise TypeError("data must be a bytes array")
+        tags.update(_tags)
+
+    # check some tags
+    for tag in [
+        "SamplesPerPixel",
+        "BitsStored",
+        "BitsAllocated",
+        "PixelRepresentation",
+        "Rows",
+        "Columns",
+    ]:
+        if tags.get(tag) is None:
+            raise ValueError("Missing required tag: %s" % tag)
+
+    # set tags
     for name, value in tags.items():
         # check tag
         if isinstance(value, pydicom.DataElement):
@@ -197,10 +213,7 @@ def make_dataset(
     ds.ContentDate = now.strftime("%Y%m%d")
     ds.ContentTime = now.strftime("%H%M%S.%f")
 
-    # set data
-    if isinstance(data, bytes):
-        ds.PixelData = data
-    else:
-        pixeldata.update_dataset(ds, data, dtype=dtype)
+    # set pixel's data
+    ds.PixelData = data
 
     return ds

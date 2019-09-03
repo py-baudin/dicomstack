@@ -113,6 +113,29 @@ def test_dicomstack_empty():
     assert not stack
 
 
+def test_dicomstack_nondicom(tmpdir):
+    """ test dicomstack class """
+
+    # create non dicom data
+    file1 = tmpdir.join("file1.txt")
+    with open(file1, "w") as fp:
+        fp.write("foobar")
+    other = tmpdir.mkdir("other")
+    file2 = other.join("file2.txt")
+    with open(file2, "w") as fp:
+        fp.write("foobaz")
+
+    # non dicom data
+    stack = dicomstack.DicomStack(tmpdir)
+    assert len(stack) == 0
+    assert not stack
+    assert set(stack.non_dicom) == {"file1.txt", "other/file2.txt"}
+
+    # using filenames
+    stack = dicomstack.DicomStack(filenames=[file1])
+    assert stack.non_dicom == [file1]
+
+
 def test_dicomstack_single(legsfile):
     """ test DicomStack with single file """
 
@@ -122,7 +145,7 @@ def test_dicomstack_single(legsfile):
     # check attributes
     assert len(stack) == 1
     assert stack
-    assert all(os.path.isfile(filename) for filename in stack.filenames)
+    assert stack.filenames == [os.path.basename(path)]
     assert stack.frames == list(stack)
 
     assert stack.frames[0]["Manufacturer"] == "SIEMENS"
@@ -142,7 +165,9 @@ def test_dicomstack_single(legsfile):
 
     # filter by fields
     assert not stack.filter_by_field(Modality="FOOBAR")
-    assert stack(Modality="MR")
+    filtered = stack(Modality="MR")
+    assert filtered
+    assert filtered.filenames == stack.filenames
 
     # convert to volume
     volume = stack.as_volume()
@@ -157,6 +182,12 @@ def test_dicomstack_single(legsfile):
     assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.tags["origin"] == origin
 
+    # from files
+    stack_ = dicomstack.DicomStack(filenames=[legsfile])
+    assert stack_.root is None
+    assert stack_.filenames == [legsfile]
+    assert stack_(Modality="MR").filenames == stack_.filenames
+
     # test pickle
     pi = pickle.dumps(stack)
     stack2 = pickle.loads(pi)
@@ -170,13 +201,13 @@ def test_dicomstack_single(legsfile):
 
 
 def test_dicomstack_zipped(legszip):
-    # zipped Signa T1w
-    # path = join(DATA_DIR, "signa_T1w.zip")
     path = legszip
     stack = dicomstack.DicomStack(path)
     assert stack
     assert len(stack) == 1
     assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
+    assert stack.filenames == ["legs.zip/LEGS.DCM"]
+    assert stack.root == os.path.dirname(legszip)
 
 
 def test_dicomstack_multi(multi):
