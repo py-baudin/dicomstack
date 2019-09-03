@@ -101,7 +101,7 @@ class DicomStack(object):
                 # UID and number
                 "StudyInstanceUID": frame["StudyInstanceUID"],
                 "SeriesInstanceUID": frame["SeriesInstanceUID"],
-                "StudyID": frame["StudyID"],
+                "StudyID": frame.get("StudyID"),
                 "SeriesNumber": frame["SeriesNumber"],
                 # dates and time
                 "StudyDate": frame["StudyDate"],
@@ -113,7 +113,6 @@ class DicomStack(object):
                 "SeriesDescription": frame.get("SeriesDescription"),
                 # file
                 "filename": filename,
-                "pixel_data": frame.dicomfile.pixels is not None,
             }
 
         return {
@@ -540,7 +539,7 @@ def parse_field(string):
 def parse_element(element):
     """ cast raw value """
     if not element.value:
-        return element.value
+        return ''
 
     elif element.VR == "SQ":
         sequence = []
