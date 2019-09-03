@@ -57,7 +57,7 @@ class DicomStack(object):
         """ create a new stack from list of frames """
         LOGGER.debug("New DICOM stack (from %s frames)" % len(frames))
         if not all([isinstance(frame, DicomFrame) for frame in frames]):
-            raise TypeError
+            raise TypeError("Invalid DicomFrame in %s" %frames)
         stack = cls.__new__(cls)
         stack.frames = list(frames)
         stack.non_dicom = []
@@ -94,6 +94,9 @@ class DicomStack(object):
         LOGGER.info("Make dicom tree")
 
         def _describe(frame):
+            filename = frame.dicomfile.filename
+            if self.root:
+                filename = os.path.relpath(filename, self.root)
             return {
                 # UID and number
                 "StudyInstanceUID": frame["StudyInstanceUID"],
@@ -109,7 +112,7 @@ class DicomStack(object):
                 "StudyDescription": frame.get("StudyDescription"),
                 "SeriesDescription": frame.get("SeriesDescription"),
                 # file
-                "filename": frame.dicomfile.filename,
+                "filename": filename,
                 "pixel_data": frame.dicomfile.pixels is not None,
             }
 
