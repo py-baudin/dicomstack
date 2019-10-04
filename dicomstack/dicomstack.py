@@ -539,7 +539,7 @@ def parse_field(string):
 def parse_element(element):
     """ cast raw value """
     if not element.value:
-        return ''
+        return ""
 
     elif element.VR == "SQ":
         sequence = []
