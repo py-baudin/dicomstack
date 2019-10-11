@@ -92,6 +92,10 @@ if AVAILABLE:
                 return
             self.tags = getattr(obj, "tags", {})
 
+        def __reduce__(self):
+            """ prevent pickling """
+            raise NotImplementedError("Cannot pickle DicomVolume object")
+
         def __array_wrap__(self, out_arr, context=None):
             """ propagate metadata if wrap is called """
             return super().__array_wrap__(self, out_arr, context)
