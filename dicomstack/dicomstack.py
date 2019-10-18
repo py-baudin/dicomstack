@@ -128,6 +128,8 @@ class DicomStack(object):
         """ short for get_field_values"""
         if not isinstance(items, (tuple, list)):
             items = [items]
+        if not all(isinstance(item, str) for item in items):
+            raise TypeError(f"Invalid Dicom tag type: {items}")
         return self.get_field_values(*items)
 
     def single(self, *fields, default=...):
