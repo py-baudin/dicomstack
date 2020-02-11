@@ -2,11 +2,12 @@
 # coding=utf-8
 
 import os
+import re
 import math
 import glob
 import datetime
 import functools
-from io import BytesIO
+from io import BytesIO, StringIO
 from collections import OrderedDict
 import zipfile
 import logging
@@ -91,6 +92,7 @@ class DicomStack(object):
 
     @property
     def dicomtree(self):
+        """ return DICOM-tree """
         LOGGER.info("Make dicom tree")
 
         def _describe(frame):
@@ -115,10 +117,37 @@ class DicomStack(object):
                 "filename": filename,
             }
 
-        return {
-            "DICOM": [_describe(frame) for frame in self.frames],
-            "NON_DICOM": self.non_dicom,
-        }
+        tree = {}
+        if self.non_dicom:
+            # put non dicom data in study: None
+            tree[0] = {i: file for i, file in enumerate(self.non_dicom)}
+
+        istudy = 1
+        study_ids = {}
+        for frame in self.frames:
+            info = _describe(frame)
+            uid = info["StudyInstanceUID"]
+            seriesnumber = info["SeriesNumber"]
+
+            # study
+            if not uid in study_ids:
+                studyid = istudy
+                study_ids[uid] = studyid
+                istudy += 1
+                tree[studyid] = {}
+            else:
+                studyid = study_ids[uid]
+
+            # series
+            if not seriesnumber in tree[studyid]:
+                tree[studyid][seriesnumber] = []
+            tree[studyid][seriesnumber].append(info)
+
+        return tree
+
+    def describe(self, **kwargs):
+        """ method for self description """
+        return describe(self.dicomtree, **kwargs)
 
     def __call__(self, **filters):
         """ short for filter_by_field """
@@ -310,6 +339,41 @@ class DicomStack(object):
                     self.non_dicom.append(full_zfilename)
                 else:
                     self.frames.extend(frames)
+
+
+def describe(dicomtree, regex=None):
+    """ return string description of dicomtree """
+
+    info = StringIO()
+
+    # DICOM
+    for study_id in sorted(dicomtree):
+        if study_id == 0:
+            # NON-DICOM
+            print("0: (non-DICOM data)", file=info)
+            for i, file in dicomtree[study_id].items():
+                if not regex or re.search(regex, file):
+                    print(f"\t{i}: {file}", file=info)
+            continue
+
+        # else: DICOM data
+        study = dicomtree[study_id]
+        first_series = next(iter(study))
+        study_description = study[first_series][0]["StudyDescription"]
+        if not study_description:
+            study_description = "(no study description)"
+        print(f"{study_id}: {study_description}", file=info)
+        for seriesnumber in sorted(study):
+            frames = study[seriesnumber]
+            len_series = len(frames)
+            series_description = frames[0]["SeriesDescription"]
+            if regex and not re.search(regex, series_description):
+                # skip
+                continue
+            desc = f"{series_description} (n={len_series})"
+            print(f"\t{seriesnumber}: {desc}", file=info)
+
+    return info.getvalue()
 
 
 class DicomFile:
