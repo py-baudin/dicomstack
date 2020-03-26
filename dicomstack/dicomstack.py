@@ -120,18 +120,18 @@ class DicomStack(object):
         tree = {}
         if self.non_dicom:
             # put non dicom data in study: None
-            tree[0] = {i: file for i, file in enumerate(self.non_dicom)}
+            tree["0"] = {i: file for i, file in enumerate(self.non_dicom)}
 
         istudy = 1
         study_ids = {}
         for frame in self.frames:
             info = _describe(frame)
             uid = info["StudyInstanceUID"]
-            seriesnumber = info["SeriesNumber"]
+            seriesnumber = str(info["SeriesNumber"])
 
             # study
             if not uid in study_ids:
-                studyid = istudy
+                studyid = str(istudy)
                 study_ids[uid] = studyid
                 istudy += 1
                 tree[studyid] = {}
@@ -163,7 +163,7 @@ class DicomStack(object):
 
     def single(self, *fields, default=...):
         """ return single value for field """
-        values = list(set(self.get_field_values(*fields)))
+        values = list(set(self.get_field_values(*fields, skip_missing=True)))
         if len(values) > 1:
             raise ValueError("Multiple values found for %s" % fields)
         elif not values and default is not ...:
@@ -174,7 +174,7 @@ class DicomStack(object):
 
     def unique(self, *fields):
         """ return unique values for field """
-        return sorted(set(self.get_field_values(*fields)))
+        return sorted(set(self.get_field_values(*fields, skip_missing=True)))
 
     def filter_by_field(self, **filters):
         """ return a sub stack with matching values for the given field """
@@ -182,14 +182,16 @@ class DicomStack(object):
         frames = self._filter(**filters)
         return self.from_frames(frames, root=self.root)
 
-    def get_field_values(self, *fields):
+    def get_field_values(self, *fields, skip_missing=False):
         """ return a list a values for the given fields """
         LOGGER.debug("Get fields' values: %s" % str(fields))
-        frames = self._existing(*fields)
+        frames = self.frames
+        if skip_missing:
+            frames = self._existing(*fields)
         return [frame.get(*fields) for frame in frames]
 
     def sort(self, *fields):
-        """ reindex database using field values """
+        """ reindex database using field values (skip frames with missing values) """
         LOGGER.debug("Sort by fields: %s" % str(fields))
         frames = self._existing(*fields)
         sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
@@ -227,7 +229,7 @@ class DicomStack(object):
         # unique values
         if isinstance(by, str):
             by = [by]
-        indices = sorted(set(stack.get_field_values(*by)))
+        indices = sorted(set(stack.get_field_values(*by, skip_missing=True)))
 
         # index values for each volume
         if len(by) == 1:
@@ -553,7 +555,7 @@ class DicomElement:
     def __repr__(self):
         """ represent DICOM element """
         string = self.repr
-        if self.sequence:
+        if self.sequence and self.value:
             for element in self.value:
                 repr_element = repr(element)
                 string += f"\n  {repr_element}"
@@ -605,7 +607,7 @@ def parse_field(string):
 def parse_element(element):
     """ cast raw value """
     if not element.value:
-        return ""
+        return None  # ""
 
     elif element.VR == "SQ":
         sequence = []

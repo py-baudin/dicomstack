@@ -222,11 +222,17 @@ def test_dicomstack_multi(multi):
     with pytest.raises(ValueError):
         stack.single("EchoTime")
 
+    # some of the frames have no echo times
+    assert None in stack["EchoTime"]
+    assert len(set(stack["EchoTime"])) == 18
+
+    # the number of unique echo times is 17
+    assert len(stack.unique("EchoTime")) == 17
+
     # convert to volumes
     echo_times, volumes = stack.as_volume(by="EchoTime")
-    assert echo_times == stack.unique("EchoTime")
-    assert len(echo_times) == 18
-    assert set(echo_times) == set(stack["EchoTime"])
+    assert len(volumes) == len(echo_times) == 17
+    assert set(echo_times) == set(stack.unique("EchoTime"))
     assert all(volume.shape == volumes[0].shape for volume in volumes[1:])
     assert all(dim > 1 for dim in volumes[0].shape)
 
