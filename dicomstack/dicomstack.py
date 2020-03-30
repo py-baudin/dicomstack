@@ -350,7 +350,7 @@ def describe(dicomtree, regex=None):
 
     # DICOM
     for study_id in sorted(dicomtree):
-        if study_id == 0:
+        if study_id == "0":
             # NON-DICOM
             print("0: (non-DICOM data)", file=info)
             for i, file in dicomtree[study_id].items():
