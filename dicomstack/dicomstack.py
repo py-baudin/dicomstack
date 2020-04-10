@@ -91,6 +91,12 @@ class DicomStack(object):
         ]
 
     @property
+    def zipfiles(self):
+        """ return path to zip files """
+        zipfiles = {get_zip_path(file) for file in self.filenames}
+        return list(zipfiles)
+
+    @property
     def dicomtree(self):
         """ return DICOM-tree """
         LOGGER.info("Make dicom tree")
