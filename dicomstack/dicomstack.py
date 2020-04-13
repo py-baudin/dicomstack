@@ -169,7 +169,7 @@ class DicomStack(object):
 
     def single(self, *fields, default=...):
         """ return single value for field """
-        values = list(set(self.get_field_values(*fields, skip_missing=True)))
+        values = list(set(self.get_field_values(*fields, ignore_missing=True)))
         if len(values) > 1:
             raise ValueError("Multiple values found for %s" % fields)
         elif not values and default is not ...:
@@ -180,7 +180,7 @@ class DicomStack(object):
 
     def unique(self, *fields):
         """ return unique values for field """
-        return sorted(set(self.get_field_values(*fields, skip_missing=True)))
+        return sorted(set(self.get_field_values(*fields, ignore_missing=True)))
 
     def filter_by_field(self, **filters):
         """ return a sub stack with matching values for the given field """
@@ -188,13 +188,14 @@ class DicomStack(object):
         frames = self._filter(**filters)
         return self.from_frames(frames, root=self.root)
 
-    def get_field_values(self, *fields, skip_missing=False):
+    def get_field_values(self, *fields, ignore_missing=False):
         """ return a list a values for the given fields """
         LOGGER.debug("Get fields' values: %s" % str(fields))
-        frames = self.frames
-        if skip_missing:
-            frames = self._existing(*fields)
-        return [frame.get(*fields) for frame in frames]
+        if ignore_missing:
+            # skip values
+            return [frame.get(*fields) for frame in self._existing(*fields)]
+        # else (raise error if missing)
+        return [frame[fields] for frame in self.frames]
 
     def sort(self, *fields):
         """ reindex database using field values (skip frames with missing values) """
@@ -205,7 +206,10 @@ class DicomStack(object):
 
     def has_field(self, field):
         """ return True if all frame have the given field """
-        return all(frame.get(field) is not None for frame in self.frames)
+        try:
+            return all(frame.get(field) is not None for frame in self.frames)
+        except KeyError:
+            return False
 
     @pixeldata.available
     def as_volume(self, by=None, rescale=True):
@@ -235,7 +239,7 @@ class DicomStack(object):
         # unique values
         if isinstance(by, str):
             by = [by]
-        indices = sorted(set(stack.get_field_values(*by, skip_missing=True)))
+        indices = sorted(set(stack.get_field_values(*by, ignore_missing=True)))
 
         # index values for each volume
         if len(by) == 1:
@@ -483,24 +487,36 @@ class DicomFrame:
             # parse field into name, index
             name, index = parse_field(field)
 
+            # return default if missing field
             element = self.elements.get(name)
             if element is None:
                 return default
-            value = element.get(index)
-            if value is None:
-                return default
+
+            # raise IndexError if index is wrong
+            value = element[index]
+            # value = element.get(index)
+            # if value is None:
+            #     return default
             values.append(value)
 
         if len(fields) == 1:
             return values[0]
         return tuple(values)
 
-    def __getitem__(self, field):
+    def __getitem__(self, fields):
         """ get field value """
-        value = self.get(field)
-        if value is None:
-            raise KeyError("Invalid field: %s" % field)
-        return value
+        if not isinstance(fields, (list, tuple)):
+            fields = [fields]
+
+        values = self.get(*fields, default=...)
+        if isinstance(values, tuple):
+            for value, field in zip(values, fields):
+                if value is ...:
+                    raise KeyError("Invalid field: %s" % field)
+        elif values is ...:
+            raise KeyError("Invalid field: %s" % fields)
+
+        return values
 
     @property
     def elements(self):
@@ -539,30 +555,29 @@ class DicomElement:
     def sequence(self):
         return self.VR == "SQ"
 
-    def get(self, index=None, default=None):
+    def get(self, item=None, default=None):
         """ return value or value[index] """
-        if index is None:
+        if item is None:
             return self.value
-
-        elif not isinstance(self.value, tuple):
+        elif not isinstance(self.value, (tuple, list, dict)):
             return default
         try:
-            return self.value[index]
+            return self.value[item]
         except KeyError:
             return default
 
-    def __getitem__(self, index):
+    def __getitem__(self, item):
         """ get field value """
-        value = self.get(index)
+        value = self.get(item)
         if value is None:
-            raise KeyError("Invalid index: %s" % index)
+            raise KeyError("Invalid index: %s" % item)
         return value
 
     def __repr__(self):
         """ represent DICOM element """
         string = self.repr
         if self.sequence and self.value:
-            for element in self.value:
+            for element in self.value.values():
                 repr_element = repr(element)
                 string += f"\n  {repr_element}"
         return string
@@ -616,9 +631,12 @@ def parse_element(element):
         return None  # ""
 
     elif element.VR == "SQ":
-        sequence = []
+        # sequence = []
+        sequence = OrderedDict()
         for d in element:
-            sequence.extend(parse_dataset(d))
+            # sequence.extend(parse_dataset(d))
+            items = parse_dataset(d)
+            sequence.update({item.keyword: item for item in items})
         return sequence
 
     elif element.VR in ["UI", "SH", "LT", "PN", "UT", "OW"]:
@@ -648,11 +666,14 @@ def cast(value):
         # if value is an array
         return tuple([cast(v) for v in value])
 
-    elif isinstance(value, pydicom.valuerep.DSfloat):
+    elif isinstance(value, (pydicom.valuerep.DSfloat, float)):
         # if value is defined as float
         if value.is_integer():
             return int(value)
         return value.real
+    elif isinstance(value, bytes):
+        # if value is defined as bytes
+        return value
     # else try force casting to int
     try:
         return int(value)
