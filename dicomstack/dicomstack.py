@@ -193,9 +193,12 @@ class DicomStack(object):
         LOGGER.debug("Get fields' values: %s" % str(fields))
         if ignore_missing:
             # skip values
-            return [frame.get(*fields) for frame in self._existing(*fields)]
-        # else (raise error if missing)
-        return [frame[fields] for frame in self.frames]
+            frames = self._existing(*fields)
+        else:
+            frames = self.frames
+        if len(fields) == 1:
+            fields = fields[0]
+        return [frame[fields] for frame in frames]
 
     def sort(self, *fields):
         """ reindex database using field values (skip frames with missing values) """
@@ -270,7 +273,7 @@ class DicomStack(object):
 
     def _filter(self, **filters):
         """ return frames filtered by fields """
-        fields = list(filters)
+        fields = tuple(filters)
 
         matchlist = []
         for field in fields:
@@ -282,11 +285,9 @@ class DicomStack(object):
 
         filtered = []
         for frame in self.frames:
-            values = frame.get(*filters)
+            values = frame.get(fields)
             if values is None:
                 continue
-            elif len(filters) == 1:
-                values = [values]
             if not all(v in m for v, m in zip(values, matchlist)):
                 continue
             filtered.append(frame)
@@ -480,42 +481,30 @@ class DicomFrame:
             repr += f"{str(element):100}\n"
         return repr
 
-    def get(self, *fields, default=None):
-        """ get values of corresponding elements """
-        values = []
-        for field in fields:
-            # parse field into name, index
-            name, index = parse_field(field)
+    def __getitem__(self, fields):
+        """ get field(s) value """
 
-            # return default if missing field
-            element = self.elements.get(name)
-            if element is None:
-                return default
+        if isinstance(fields, str):
+            field_list = [fields]
+        elif isinstance(fields, tuple) and all(
+            isinstance(field, str) for field in fields
+        ):
+            field_list = list(fields)
+        else:
+            raise ValueError(f"Invalid field value(s): {fields}")
 
-            # raise IndexError if index is wrong
-            value = element[index]
-            # value = element.get(index)
-            # if value is None:
-            #     return default
-            values.append(value)
+        # return one value per field
+        values = [get_element_value(self.elements, field) for field in field_list]
 
-        if len(fields) == 1:
+        if isinstance(fields, str):
             return values[0]
         return tuple(values)
 
-    def __getitem__(self, fields):
-        """ get field value """
-        if not isinstance(fields, (list, tuple)):
-            fields = [fields]
-
-        values = self.get(*fields, default=...)
-        if isinstance(values, tuple):
-            for value, field in zip(values, fields):
-                if value is ...:
-                    raise KeyError("Invalid field: %s" % field)
-        elif values is ...:
-            raise KeyError("Invalid field: %s" % fields)
-
+    def get(self, fields, default=None):
+        try:
+            values = self.__getitem__(fields)
+        except (KeyError, IndexError):
+            return default
         return values
 
     @property
@@ -523,8 +512,7 @@ class DicomFrame:
         """ retrieve DICOM field values """
         if self._elements is None:
             # retrieve elements from dataset
-            elements = parse_dataset(self.dicomfile.dataset, self.index)
-            self._elements = OrderedDict((e.keyword, e) for e in elements)
+            self._elements = parse_dataset(self.dicomfile.dataset, self.index)
         return self._elements
 
     @property
@@ -542,44 +530,34 @@ class DicomFrame:
 class DicomElement:
     """ pickable DICOM element """
 
-    def __init__(self, element):
-        """ init DICOM element """
-        self.name = str(element.name)
-        self.keyword = str(element.keyword)
-        self.value = parse_element(element)
-        self.tag = (element.tag.group, element.tag.elem)
-        self.VR = str(element.VR)
-        self.repr = str(element)
-
     @property
     def sequence(self):
         return self.VR == "SQ"
 
-    def get(self, item=None, default=None):
-        """ return value or value[index] """
-        if item is None:
-            return self.value
-        elif not isinstance(self.value, (tuple, list, dict)):
-            return default
-        try:
-            return self.value[item]
-        except KeyError:
-            return default
+    def __init__(self, element):
+        """ init DICOM element """
+        self.name = str(element.name)
+        self.keyword = str(element.keyword)
+        self.tag = (element.tag.group, element.tag.elem)
+        self.VR = str(element.VR)
+        self.value = parse_element(element)
+        self.repr = str(element)
 
     def __getitem__(self, item):
-        """ get field value """
-        value = self.get(item)
-        if value is None:
-            raise KeyError("Invalid index: %s" % item)
-        return value
+        """ get item if sequence """
+        if not self.sequence:
+            raise AttributeError("Cannot get item of non-sequence DICOM element")
+        return self.value[item]
 
     def __repr__(self):
         """ represent DICOM element """
         string = self.repr
-        if self.sequence and self.value:
-            for element in self.value.values():
-                repr_element = repr(element)
-                string += f"\n  {repr_element}"
+        if self.sequence:
+            for i, elements in enumerate(self.value):
+                string += f"\n  item: {i}"
+                for element in elements.values():
+                    repr_element = repr(element)
+                    string += f"\n    {repr_element}"
         return string
 
 
@@ -606,38 +584,14 @@ def list_files(path):
     return path, filenames
 
 
-def parse_field(string):
-    """ parse string with optional index suffix
-        syntax: "txt" or "txt_num"
-    """
-    split = string.split("_")
-    try:
-        field = split[0]
-        assert field.isalpha()
-    except AssertionError:
-        raise ValueError('Invalid field name in: "%s"' % string)
-
-    try:
-        index = None if len(split) == 1 else int(split[1])
-    except TypeError:
-        raise ValueError('Cannot parse index in: "%s"' % string)
-
-    return field, index
-
-
 def parse_element(element):
     """ cast raw value """
-    if not element.value:
-        return None  # ""
 
-    elif element.VR == "SQ":
-        # sequence = []
-        sequence = OrderedDict()
-        for d in element:
-            # sequence.extend(parse_dataset(d))
-            items = parse_dataset(d)
-            sequence.update({item.keyword: item for item in items})
-        return sequence
+    if element.VR == "SQ":
+        return [parse_dataset(d) for d in element]
+
+    elif not element.value:
+        return None  # ""
 
     elif element.VR in ["UI", "SH", "LT", "PN", "UT", "OW"]:
         return str(element.value)
@@ -657,6 +611,33 @@ def parse_element(element):
     else:
         # other: string, int or float
         return cast(element.value)
+
+
+def parse_dataset(dataset, index=None, flatten=False):
+    """ parse dataset to retrieve elements """
+    elements = OrderedDict()
+    for element in dataset:
+        if element.keyword == "PixelData":
+            # skip pixel data
+            continue
+
+        elif element.keyword == "PerFrameFunctionalGroupsSequence":
+            # multi-frame DICOM: flatten sub-dataset
+            elements.update(parse_dataset(element[index], flatten=True))
+
+        elif element.keyword == "SharedFunctionalGroupsSequence":
+            # multi-frame DICOM: flatten sub-dataset
+            for _dataset in element:
+                elements.update(parse_dataset(_dataset, flatten=True))
+
+        elif flatten and element.VR == "SQ":
+            # flatten  sequence
+            for _dataset in element:
+                elements.update(parse_dataset(_dataset))  # , flatten=True))
+        else:
+            # append to elements
+            elements[element.keyword] = DicomElement(element)
+    return elements
 
 
 def cast(value):
@@ -681,26 +662,6 @@ def cast(value):
         return str(value)
 
 
-def parse_dataset(dataset, index=None, flatten=False):
-    """ parse dataset to retrieve elements """
-    elements = []
-    for element in dataset:
-        if element.keyword == "PixelData":
-            # skip pixel data
-            continue
-        elif element.keyword == "PerFrameFunctionalGroupsSequence":
-            # multi-frame DICOM
-            elements.extend(parse_dataset(element[index], flatten=True))
-        elif flatten and element.VR == "SQ":
-            # extend elements
-            for _dataset in element:
-                elements.extend(parse_dataset(_dataset, flatten=True))
-        else:
-            # append to elements
-            elements.append(DicomElement(element))
-    return elements
-
-
 def get_nframe(dataset):
     """ return number of frames if several """
     frames = getattr(dataset, "PerFrameFunctionalGroupsSequence", None)
@@ -708,3 +669,51 @@ def get_nframe(dataset):
         return len(frames)
     # else
     return None
+
+
+def get_element_value(elements, string):
+    """ get element's value by key """
+
+    # get element's value recursively
+    def _get(elements, keys):
+        key = keys[0]
+        element = elements[keys[0]]
+        if len(keys) > 1:
+            return _get(element, keys[1:])
+        return element.value
+
+    keys, index = parse_keys(string)
+    value = _get(elements, keys)
+
+    # return value
+    if index is not None:
+        return value[index]
+    return value
+
+
+#
+def parse_keys(string):
+    """ parse string with optional index suffix
+        syntax: "txt" or "txt_num"
+    """
+    # parse key
+    if "_" in string:
+        keys, index = string.split("_")
+        index = int(index) - 1
+    else:
+        keys, index = string, None
+
+    def cast_key(value):
+        if value.isdigit():
+            return int(value) - 1
+        elif value.isalnum():
+            return value
+        else:
+            raise ValueError(f"Invalid field value: {value}")
+
+    # split into sub-fields/index
+    keys = [cast_key(key) for key in keys.split(".")]
+    if isinstance(keys[-1], int):
+        raise ValueError(f"Last item in key must not be an int: {keys}")
+
+    return keys, index

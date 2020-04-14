@@ -14,6 +14,22 @@ from dicomstack import dicomstack
 DATA_DIR = join(dirname(dirname(dicomstack.__file__)), "data")
 
 
+def test_parse_keys():
+    """ test _parse_field """
+    assert dicomstack.parse_keys("Field") == (["Field"], None)
+    assert dicomstack.parse_keys("Field_1") == (["Field"], 0)
+    assert dicomstack.parse_keys("Field.1.Subfield") == (["Field", 0, "Subfield"], None)
+
+    with pytest.raises(ValueError):
+        print(dicomstack.parse_keys("Invalid Two"))
+
+    with pytest.raises(ValueError):
+        print(dicomstack.parse_keys("Name_"))
+
+    with pytest.raises(ValueError):
+        dicomstack.parse_keys("Name_a")
+
+
 def test_dicomfile_single(legsfile):
     # single slice DICOM
     path = legsfile
@@ -30,27 +46,47 @@ def test_dicomfile_single(legsfile):
     assert len(frames) == 1
 
     frame = frames[0]
-    assert frame._elements is None
-    assert frame._pixels is None
-    assert frame.elements
+    assert frame._elements is None  # elements not loaded yet
+    assert frame._pixels is None  # pixels not loaded yet
+    assert frame.elements  # this is a property
     assert frame.pixels.ndim == 2
 
     # test element
+    # single value
     element = frame.elements["Modality"]
     assert element.name == "Modality"
     assert element.VR == "CS"
     assert element.tag == (0x0008, 0x0060)
+    assert element.value == "MR"
 
+    # multi value
     element = frame.elements["ImageType"]
-    assert element.get()[0] == "ORIGINAL"
-    assert element.get(0) == "ORIGINAL"
+    assert isinstance(element.value, tuple)
+    assert element.value[0] == "ORIGINAL"
 
-    # test frame.get
-    assert frame.get("Modality") == "MR"
-    assert frame.get("Manufacturer") == "SIEMENS"
-    assert frame.get("Modality", "Manufacturer") == ("MR", "SIEMENS")
-    assert frame.get("ImageType")[0] == "ORIGINAL"
-    assert frame.get("ImageType_0") == "ORIGINAL"
+    # sequence
+    element = frame.elements["IconImageSequence"]
+    assert isinstance(element.value, list)
+    assert element[0]
+    with pytest.raises(IndexError):
+        element[1]
+    assert isinstance(element.value[0], dicomstack.OrderedDict)
+
+    # test frame getitem
+    assert frame["Modality"] == "MR"
+    assert frame["Manufacturer"] == "SIEMENS"
+    assert frame[("Modality", "Manufacturer")] == ("MR", "SIEMENS")
+    assert frame["ImageType"][0] == "ORIGINAL"
+    assert frame["ImageType_1"] == "ORIGINAL"
+    assert frame["IconImageSequence.1.Rows"] == 64
+
+    with pytest.raises(KeyError):
+        assert frame["UnknownField"]
+    assert frame.get("UnknownField") is None
+
+    with pytest.raises(IndexError):
+        assert frame["IconImageSequence.10.Rows"]
+    assert frame.get("IconImageSequence.10.Rows") is None
 
 
 def test_dicomfile_multi(multi):
@@ -76,24 +112,6 @@ def test_dicomfile_multi(multi):
     assert frame.index == 89
     assert "EchoTime" in frame.elements
     assert frame.pixels.ndim == 2
-
-
-def test_parse_field():
-    """ test _parse_field """
-    assert dicomstack.parse_field("Name") == ("Name", None)
-    assert dicomstack.parse_field("Name_0") == ("Name", 0)
-
-    with pytest.raises(ValueError):
-        print(dicomstack.parse_field("Invalid1"))
-
-    with pytest.raises(ValueError):
-        print(dicomstack.parse_field("Invalid Two"))
-
-    with pytest.raises(ValueError):
-        print(dicomstack.parse_field("Name_"))
-
-    with pytest.raises(ValueError):
-        dicomstack.parse_field("Name_a")
 
 
 def test_get_zip_path():
@@ -157,7 +175,7 @@ def test_dicomstack_single(legsfile):
     assert stack.get_field_values("Modality") == ["MR"]
     assert stack["Modality"] == ["MR"]
     assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
-    assert stack["ImageType_0"] == ["ORIGINAL"]
+    assert stack["ImageType_1"] == ["ORIGINAL"]
 
     # unique
     assert stack.single("Modality") == "MR"
@@ -227,7 +245,13 @@ def test_dicomstack_multi(multi):
     assert len(set(stack["EchoTime"])) == 18
 
     # the number of unique echo times is 17
-    assert len(stack.unique("EchoTime")) == 17
+    echo_times = stack.unique("EchoTime")
+    assert len(echo_times) == 17
+
+    # test filter
+    filtered = stack(EchoTime=echo_times[0])
+    assert filtered
+    assert all(value == echo_times[0] for value in filtered["EchoTime"])
 
     # convert to volumes
     echo_times, volumes = stack.as_volume(by="EchoTime")
