@@ -278,7 +278,7 @@ class DicomStack(object):
         matchlist = []
         for field in fields:
             match = filters[field]
-            if not isinstance(match, list):
+            if not isinstance(match, (list, tuple)):
                 matchlist.append([match])
             else:
                 matchlist.append(match)
