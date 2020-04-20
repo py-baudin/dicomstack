@@ -376,8 +376,8 @@ def describe(dicomtree, regex=None):
         if not study_description:
             study_description = "(no study description)"
         print(f"{study_id}: {study_description}", file=info)
-        for seriesnumber in sorted(study):
-            frames = study[seriesnumber]
+        for seriesnumber in sorted([int(v) for v in study]):
+            frames = study[str(seriesnumber)]
             len_series = len(frames)
             series_description = frames[0]["SeriesDescription"]
             if regex and not re.search(regex, series_description):
