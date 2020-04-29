@@ -80,6 +80,10 @@ class DicomStack(object):
     def __repr__(self):
         return "DICOM(%d)" % len(self)
 
+    def __contains__(self, field):
+        """ short for has_field """
+        return self.has_field(field)
+
     @property
     def filenames(self):
         """ return list of dicom files """
