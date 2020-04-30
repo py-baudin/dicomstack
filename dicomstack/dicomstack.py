@@ -211,10 +211,14 @@ class DicomStack(object):
         sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
         return self.from_frames(sorted_frames, root=self.root)
 
-    def has_field(self, field):
+    def has_field(self, field, how="all"):
         """ return True if all frame have the given field """
+        if how == "all":
+            func = all
+        else:
+            fun == any
         try:
-            return all(frame.get(field) is not None for frame in self.frames)
+            return func(frame.get(field) is not None for frame in self.frames)
         except KeyError:
             return False
 
@@ -228,11 +232,11 @@ class DicomStack(object):
             return None
         elif len(self) == 1:
             stack = self
-        elif self.has_field("InStackPositionNumber"):
+        elif self.has_field("InStackPositionNumber", how="all"):
             stack = self.sort("InStackPositionNumber")
-        elif self.has_field("SliceLocation"):
+        elif self.has_field("SliceLocation", how="all"):
             stack = self.sort("SliceLocation")
-        elif self.has_field("AcquisitionNumber"):
+        elif self.has_field("AcquisitionNumber", how="all"):
             stack = self.sort("AcquisitionNumber")
         else:
             raise NotImplementedError("Could not defined sorting method")
@@ -594,7 +598,7 @@ def parse_element(element):
     if element.VR == "SQ":
         return [parse_dataset(d) for d in element]
 
-    elif not element.value:
+    elif element.value is None or element.repval == "''":
         return None  # ""
 
     elif element.VR in ["UI", "SH", "LT", "PN", "UT", "OW"]:

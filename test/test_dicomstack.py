@@ -236,17 +236,17 @@ def test_dicomstack_multi(multi):
     assert len(stack) == 90
     assert set(stack["EchoNumbers"]) == set(range(1, 18))
 
+    # echo times
+    assert stack.has_field("EchoTime")
+    assert "EchoTime" in stack
+
     # multiple echos
     with pytest.raises(ValueError):
         stack.single("EchoTime")
 
-    # some of the frames have no echo times
-    assert None in stack["EchoTime"]
-    assert len(set(stack["EchoTime"])) == 18
-
-    # the number of unique echo times is 17
+    # the number of unique echo times is 18
     echo_times = stack.unique("EchoTime")
-    assert len(echo_times) == 17
+    assert len(echo_times) == 18
 
     # test filter
     filtered = stack(EchoTime=echo_times[0])
@@ -255,7 +255,7 @@ def test_dicomstack_multi(multi):
 
     # convert to volumes
     echo_times, volumes = stack.as_volume(by="EchoTime")
-    assert len(volumes) == len(echo_times) == 17
+    assert len(volumes) == len(echo_times) == 18
     assert set(echo_times) == set(stack.unique("EchoTime"))
     assert all(volume.shape == volumes[0].shape for volume in volumes[1:])
     assert all(dim > 1 for dim in volumes[0].shape)
