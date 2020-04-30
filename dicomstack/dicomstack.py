@@ -600,21 +600,9 @@ def parse_element(element):
     elif element.VR in ["UI", "SH", "LT", "PN", "UT", "OW"]:
         return str(element.value)
 
-    elif element.VR == "DA":
-        # date
-        fmt = "%Y%m%d"
-        return datetime.datetime.strptime(element.value, fmt).date().isoformat()
-
-    elif element.VR == "TM":
-        # time
-        if "." in element.value:
-            fmt = "%H%M%S.%f"
-        else:
-            fmt = "%H%M%S"
-        return datetime.datetime.strptime(element.value, fmt).time().isoformat()
     else:
-        # other: string, int or float
-        return cast(element.value)
+        # other: string, int or float or date
+        return cast(element.value, element.VR)
 
 
 def parse_dataset(dataset, index=None, flatten=False):
@@ -644,18 +632,30 @@ def parse_dataset(dataset, index=None, flatten=False):
     return elements
 
 
-def cast(value):
+def cast(value, VR):
     """ cast DICOM value type """
 
     if isinstance(value, pydicom.multival.MultiValue):
         # if value is an array
-        return tuple([cast(v) for v in value])
+        return tuple([cast(v, VR) for v in value])
+
+    elif VR == "DA":
+        # date
+        return datetime.datetime.strptime(value, "%Y%m%d").date().isoformat()
+
+    elif VR == "TM":
+        # time
+        if "." in value:
+            return datetime.datetime.strptime(value, "%H%M%S.%f").time().isoformat()
+        else:
+            return datetime.datetime.strptime(value, "%H%M%S").time().isoformat()
 
     elif isinstance(value, (pydicom.valuerep.DSfloat, float)):
         # if value is defined as float
         if value.is_integer():
             return int(value)
         return value.real
+
     elif isinstance(value, bytes):
         # if value is defined as bytes
         return value
