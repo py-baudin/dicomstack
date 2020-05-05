@@ -68,7 +68,7 @@ def make_volume(frames, rescale=True):
         pixels = frame.pixels
         if rescale:
             slope = frame.get("RescaleSlope", default=1)
-            intercept = frame.get("RescaleSlope", default=0)
+            intercept = frame.get("RescaleIntercept", default=0)
             pixels = pixels * slope + intercept
         slices.append(pixels)
     return DicomVolume(slices, tags).T
