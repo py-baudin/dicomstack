@@ -543,7 +543,9 @@ class DicomElement:
         return self.VR == "SQ"
 
     def __init__(self, element):
-        """ init DICOM element """
+        """ init DICOM element
+        TODO: use only properties to save memory?
+        """
         self.name = str(element.name)
         self.keyword = str(element.keyword)
         self.tag = (element.tag.group, element.tag.elem)
