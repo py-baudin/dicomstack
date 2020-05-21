@@ -176,10 +176,18 @@ def test_dicomstack_single(legsfile):
     assert stack["Modality"] == ["MR"]
     assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
     assert stack["ImageType_1"] == ["ORIGINAL"]
+    assert stack["StudyID"] == [None]
+    with pytest.raises(KeyError):
+        stack["UnknownField"]
 
     # unique
     assert stack.single("Modality") == "MR"
     assert stack.unique("Modality") == ["MR"]
+    assert stack.unique("Manufacturer", "ManufacturerModelName", "Modality") == [
+        ("SIEMENS", "Avanto", "MR")
+    ]
+    assert stack.unique("StudyID") == []
+    assert stack.unique("UnknownField") == []
 
     # filter by fields
     assert not stack.filter_by_field(Modality="FOOBAR")
@@ -252,6 +260,11 @@ def test_dicomstack_multi(multi):
     filtered = stack(EchoTime=echo_times[0])
     assert filtered
     assert all(value == echo_times[0] for value in filtered["EchoTime"])
+
+    # test as_volume
+    assert stack(UnknownField=1).as_volume() is None
+    assert stack(ImageType=1).as_volume() is None
+    assert stack.as_volume(by="UnknownField") == ([], [])
 
     # convert to volumes
     echo_times, volumes = stack.as_volume(by="EchoTime")

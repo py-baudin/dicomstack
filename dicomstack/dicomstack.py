@@ -132,26 +132,32 @@ class DicomStack(object):
             # put non dicom data in study: None
             tree["0"] = {i: file for i, file in enumerate(self.non_dicom)}
 
-        istudy = 1
-        study_ids = {}
+        uidtree = {}
+        studies = {}
         for frame in self.frames:
             info = _describe(frame)
             uid = info["StudyInstanceUID"]
             seriesnumber = str(info["SeriesNumber"])
 
             # study
-            if not uid in study_ids:
-                studyid = str(istudy)
-                study_ids[uid] = studyid
-                istudy += 1
-                tree[studyid] = {}
-            else:
-                studyid = study_ids[uid]
+            if not uid in uidtree:
+                studies[uid] = info.get("StudyID")
+                uidtree[uid] = {}
 
             # series
-            if not seriesnumber in tree[studyid]:
-                tree[studyid][seriesnumber] = []
-            tree[studyid][seriesnumber].append(info)
+            if not seriesnumber in uidtree[uid]:
+                uidtree[uid][seriesnumber] = []
+            uidtree[uid][seriesnumber].append(info)
+
+        # fill tree using study ids
+        for uid in sorted(studies):
+            if studies[uid]:
+                id = studies[uid]
+            elif not tree:
+                id = 1
+            else:
+                id = max([int(i) for i in tree]) + 1
+            tree[str(id)] = uidtree[uid]
 
         return tree
 
@@ -253,7 +259,10 @@ class DicomStack(object):
         indices = sorted(set(stack.get_field_values(*by, ignore_missing=True)))
 
         # index values for each volume
-        if len(by) == 1:
+        if not indices:
+            # empty stack
+            return [], []
+        elif len(by) == 1:
             filters = [{by[0]: value} for value in indices]
         else:
             filters = [
@@ -273,7 +282,8 @@ class DicomStack(object):
         """ return frames with existing values"""
         filtered = []
         for frame in self.frames:
-            if frame.get(*fields) is None:
+            values = frame.get(fields)
+            if values is None or None in values:
                 # check index exists
                 continue
             filtered.append(frame)
