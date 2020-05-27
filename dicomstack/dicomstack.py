@@ -217,6 +217,38 @@ class DicomStack(object):
         sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
         return self.from_frames(sorted_frames, root=self.root)
 
+    def getaxis(self):
+        """ return the image acquisition axis with respect to the patient """
+        orient = self.single("ImageOrientationPatient")
+        vec = (
+            orient[1] * orient[5] - orient[2] * orient[4],
+            orient[0] * orient[5] - orient[2] * orient[3],
+            orient[0] * orient[4] - orient[1] * orient[3],
+        )
+        return vec.index(max(vec))
+
+    def reorder(self):
+        """ reindex stack based on spatial information """
+        if len(self) <= 1:
+            return self
+
+        if len(self.unique("InStackPositionNumber")) == len(self):
+            return self.sort("InStackPositionNumber")
+
+        if len(self.unique("SliceLocation")) == len(self):
+            return self.sort("SliceLocation")
+
+        if len(self.unique("InStackPositionNumber")) == len(self):
+            return self.sort("InStackPositionNumber")
+
+        # else use ImagePositionPatient
+        axis = self.getaxis()
+        field = f"ImagePositionPatient_{axis + 1}"
+        if len(self.unique(field)) == len(self):
+            return self.sort(field)
+        else:
+            raise ValueError("Could not sort stack spatially")
+
     def has_field(self, field, how="all"):
         """ return True if all frame have the given field """
         if how == "all":
@@ -229,25 +261,24 @@ class DicomStack(object):
             return False
 
     @pixeldata.available
-    def as_volume(self, by=None, rescale=True):
+    def as_volume(self, by=None, rescale=True, reorder=True):
         """ as volume """
         LOGGER.debug("Make volume (use fields: %s)" % str(by))
 
-        # sort by position
         if len(self) == 0:
             return None
-        elif len(self) == 1:
-            stack = self
-        elif self.has_field("InStackPositionNumber", how="all"):
-            stack = self.sort("InStackPositionNumber")
-        elif self.has_field("SliceLocation", how="all"):
-            stack = self.sort("SliceLocation")
-        elif self.has_field("AcquisitionNumber", how="all"):
-            stack = self.sort("AcquisitionNumber")
-        else:
-            raise NotImplementedError("Could not defined sorting method")
+        # else continue
+        stack = self
 
         if not by:
+            # single volume
+
+            if reorder:
+                # sort by location
+                try:
+                    stack = self.reorder()
+                except ValueError:
+                    raise NotImplementedError("Could not defined sorting method")
             # single non-indexed volume
             return pixeldata.make_volume(stack.frames, rescale=rescale)
 
@@ -274,6 +305,14 @@ class DicomStack(object):
         volumes = []
         for filter in filters:
             substack = stack.filter_by_field(**filter)
+
+            if reorder:
+                # sort by location
+                try:
+                    substack = substack.reorder()
+                except ValueError:
+                    raise NotImplementedError("Could not defined sorting method")
+
             volume = pixeldata.make_volume(substack.frames, rescale=rescale)
             volumes.append(volume)
         return indices, volumes
