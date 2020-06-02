@@ -14,7 +14,9 @@ def cli():
 
     # add subprograms
     subparser = parser.add_subparsers()
-    cli_describe(subparser)
+    cli_list(subparser)
+    cli_tags(subparser)
+    cli_view(subparser)
     cli_anonymize(subparser)
 
     # parse arguments
@@ -26,43 +28,89 @@ def cli():
         print(parser.print_help())
 
 
-def cli_describe(subparser):
-    """ describe DICOM stack """
+def cli_tags(subparser):
+    """ show DICOM tags for one frame """
 
     parser_anonymize = subparser.add_parser(
-        "list", help="List studies, series and non-DICOM files."
+        "tags", help="Show DICOM tags for one frame."
     )
     parser_anonymize.add_argument("src", help="Source file or directory")
     parser_anonymize.add_argument(
-        "--tags", help="Show DICOM tags", default=False, action="store_true"
+        "-i",
+        dest="index",
+        type=int,
+        default=1,
+        help="Show tags for i-th frame (default: 1).",
     )
+    parser_anonymize.add_argument("--series", type=int, help="Filter by series number.")
     parser_anonymize.add_argument(
-        "-n", help="Only show n-first frames", type=int, default=None
-    )
-    parser_anonymize.add_argument(
-        "--series", nargs="*", help="Filter by series number", type=int
+        "-f", "--filters", type=dicom_filters, help="Filter by tag=value,... pairs."
     )
 
-    def _describe(args):
+    def _tags(args):
         # load stack
         stack = dicomstack.DicomStack(args.src)
 
         if args.series:
             # filter by series
             stack = stack(SeriesNumber=args.series)
+        if args.filters:
+            stack = stack(**args.filters)
 
-        if args.tags:
-            # show dicom tags
-            frames = stack.frames[: args.n]
-            for frame in frames:
-                frame.elements
-                print(frame)
-            print(f"Showing {len(frames)} frame(s).")
-        else:
-            # show description
-            print(stack.describe())
+        # show dicom tags
+        frame = stack.frames[args.index - 1]
+        frame.elements
+        print(frame)
 
-    parser_anonymize.set_defaults(func=_describe)
+    parser_anonymize.set_defaults(func=_tags)
+
+
+def cli_view(subparser):
+    """ show DICOM values for one or more tags """
+
+    parser_anonymize = subparser.add_parser(
+        "view", help="Show unique DICOM values of one or more tags."
+    )
+    parser_anonymize.add_argument("src", help="Source file or directory")
+    parser_anonymize.add_argument("tags", nargs="+", help="DICOM tags.")
+    parser_anonymize.add_argument("--series", type=int, help="Filter by series number.")
+    parser_anonymize.add_argument(
+        "-f", "--filters", type=dicom_filters, help="Filter by tag=value,... pairs."
+    )
+
+    def _view(args):
+        # load stack
+        stack = dicomstack.DicomStack(args.src)
+
+        if args.series:
+            # filter by series
+            stack = stack(SeriesNumber=args.series)
+        if args.filters:
+            stack = stack(**args.filters)
+
+        # show dicom tags
+        for tag in args.tags:
+            print(f"{tag}:", stack.unique(tag))
+
+    parser_anonymize.set_defaults(func=_view)
+
+
+def cli_list(subparser):
+    """ describe DICOM stack """
+
+    parser_anonymize = subparser.add_parser(
+        "list", help="List studies, series and non-DICOM files."
+    )
+    parser_anonymize.add_argument("src", help="Source file or directory")
+
+    def _list(args):
+        # load stack
+        stack = dicomstack.DicomStack(args.src)
+
+        # show description
+        print(stack.describe())
+
+    parser_anonymize.set_defaults(func=_list)
 
 
 def cli_anonymize(subparser):
@@ -109,3 +157,19 @@ def cli_anonymize(subparser):
             print("\t", filename)
 
     parser_anonymize.set_defaults(func=_anonymize)
+
+
+def dicom_filters(value):
+    """ return (tag,value) pairs """
+    filters = {}
+    for tag_value in value.split(","):
+        tag, value = tag_value.strip().split("=")
+        try:
+            value = int(value)
+        except ValueError:
+            try:
+                value = float(value)
+            except:
+                pass
+        filters[tag] = value
+    return filters
