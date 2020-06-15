@@ -208,6 +208,11 @@ def test_dicomstack_single(legsfile):
     assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.tags["origin"] == origin
 
+    # test remove duplicates
+    stack2 = dicomstack.DicomStack.from_frames(stack.frames + stack.frames)
+    assert len(stack2) == 2 * len(stack)
+    assert stack2.remove_duplicates()["SOPInstanceUID"] == stack["SOPInstanceUID"]
+
     # from files
     stack_ = dicomstack.DicomStack(filenames=[legsfile])
     assert stack_.root is None

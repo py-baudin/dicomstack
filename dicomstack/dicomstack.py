@@ -210,6 +210,17 @@ class DicomStack(object):
             fields = fields[0]
         return [frame[fields] for frame in frames]
 
+    def remove_duplicates(self):
+        """ remove duplicated frames """
+        unique_uids = set()
+        uids = self.get_field_values("SOPInstanceUID")
+        unique_frames = [
+            frame
+            for uid, frame in zip(uids, self.frames)
+            if not (uid in unique_uids or unique_uids.add(uid))
+        ]
+        return self.from_frames(unique_frames, root=self.root)
+
     def sort(self, *fields):
         """ reindex database using field values (skip frames with missing values) """
         LOGGER.debug("Sort by fields: %s" % str(fields))
@@ -267,8 +278,9 @@ class DicomStack(object):
 
         if len(self) == 0:
             return None
+
         # else continue
-        stack = self
+        stack = self.remove_duplicates()
 
         if not by:
             # single volume
