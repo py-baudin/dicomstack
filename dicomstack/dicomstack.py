@@ -243,14 +243,15 @@ class DicomStack(object):
         if len(self) <= 1:
             return self
 
-        if len(self.unique("InStackPositionNumber")) == len(self):
-            return self.sort("InStackPositionNumber")
-
-        if len(self.unique("SliceLocation")) == len(self):
-            return self.sort("SliceLocation")
-
-        if len(self.unique("InStackPositionNumber")) == len(self):
-            return self.sort("InStackPositionNumber")
+        # wrong
+        # if len(self.unique("InStackPositionNumber")) == len(self):
+        #     return self.sort("InStackPositionNumber")
+        #
+        # if len(self.unique("SliceLocation")) == len(self):
+        #     return self.sort("SliceLocation")
+        #
+        # if len(self.unique("InStackPositionNumber")) == len(self):
+        #     return self.sort("InStackPositionNumber")
 
         # else use ImagePositionPatient
         axis = self.getaxis()
