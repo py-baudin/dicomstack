@@ -147,7 +147,7 @@ def test_dicomstack_nondicom(tmpdir):
     stack = dicomstack.DicomStack(tmpdir)
     assert len(stack) == 0
     assert not stack
-    assert set(stack.non_dicom) == {"file1.txt", "other/file2.txt"}
+    assert set(stack.non_dicom) == {"file1.txt", join("other", "file2.txt")}
 
     # using filenames
     stack = dicomstack.DicomStack(filenames=[file1])
@@ -237,7 +237,7 @@ def test_dicomstack_zipped(legszip):
     assert stack
     assert len(stack) == 1
     assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
-    assert stack.filenames == ["legs.zip/LEGS.DCM"]
+    assert stack.filenames == [join("legs.zip", "LEGS.DCM")]
     assert stack.root == os.path.dirname(legszip)
 
 

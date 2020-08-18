@@ -95,7 +95,7 @@ def write_dataset(
     # (initially no data elements, but file_meta
     # supplied)
     LOGGER.debug("Setting file meta information.")
-    file_meta = pydicom.Dataset()
+    file_meta = pydicom.dataset.FileMetaDataset()
     # Populate required values for file meta information
     if media_storage_class == "MRI":
         file_meta.MediaStorageSOPClassUID = "1.2.840.10008.5.1.4.1.1.4"
