@@ -7,7 +7,7 @@ setup(
     name="dicomstack",
     version=__version__,
     packages=find_packages(),
-    install_requires=["pydicom>=1.0"],
+    install_requires=["pydicom>=2.0"],
     entry_points={"console_scripts": ["dicom = dicomstack.cli:cli"]},
     # metadata for upload to PyPI
     author="Pierre-Yves Baudin",
