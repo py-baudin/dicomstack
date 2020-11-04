@@ -1,6 +1,9 @@
 *.pyc
+*egg-info/
 Pipfile*
 
-*egg-info/
-test_data/
 .DS_Store
+
+dist/
+build/
+test_data/
