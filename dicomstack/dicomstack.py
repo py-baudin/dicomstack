@@ -709,14 +709,22 @@ def cast(value, VR):
 
     elif VR == "DA":
         # date
-        return datetime.datetime.strptime(value, "%Y%m%d").date().isoformat()
+        try:
+            return datetime.datetime.strptime(value, "%Y%m%d").date().isoformat()
+        except ValueError:
+            # invalid date
+            return None
 
     elif VR == "TM":
         # time
-        if "." in value:
-            return datetime.datetime.strptime(value, "%H%M%S.%f").time().isoformat()
-        else:
-            return datetime.datetime.strptime(value, "%H%M%S").time().isoformat()
+        try:
+            if "." in value:
+                return datetime.datetime.strptime(value, "%H%M%S.%f").time().isoformat()
+            else:
+                return datetime.datetime.strptime(value, "%H%M%S").time().isoformat()
+        except ValueError:
+            # invalid time
+            return None
 
     elif isinstance(value, (pydicom.valuerep.DSfloat, float)):
         # if value is defined as float
