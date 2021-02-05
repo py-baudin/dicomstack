@@ -291,7 +291,7 @@ class DicomStack(object):
                 try:
                     stack = self.reorder()
                 except ValueError:
-                    raise NotImplementedError("Could not defined sorting method")
+                    raise NotImplementedError("Could not define sorting method")
             # single non-indexed volume
             return pixeldata.make_volume(stack.frames, rescale=rescale)
 
