@@ -366,6 +366,9 @@ class DicomStack(object):
     def _load_files(self, filenames):
         """ load filenames """
         for filename in filenames:
+            # skip DICOMDIR
+            if filename.endswith("DICOMDIR"):
+                continue
             zip_path = get_zip_path(filename)
             if zip_path:
                 self._load_zipfile(filename)
