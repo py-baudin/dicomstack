@@ -378,7 +378,7 @@ class DicomStack(object):
         # duplicates
         nframes = len(self.unique("SOPInstanceUID"))
         if len(self) != nframes:
-            LOGGER.warning(f"{len(self) - nframes} duplicated frames were found")
+            LOGGER.warning(f"Duplicated frames were found ({len(self) - nframes})")
 
     def _load_file(self, filename):
         """ load single Dicom file """
