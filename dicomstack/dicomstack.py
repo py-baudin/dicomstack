@@ -291,7 +291,7 @@ class DicomStack(object):
                 try:
                     stack = self.reorder()
                 except ValueError:
-                    raise NotImplementedError("Could not defined sorting method")
+                    raise NotImplementedError("Could not define sorting method")
             # single non-indexed volume
             return pixeldata.make_volume(stack.frames, rescale=rescale)
 
@@ -366,6 +366,9 @@ class DicomStack(object):
     def _load_files(self, filenames):
         """ load filenames """
         for filename in filenames:
+            # skip DICOMDIR
+            if filename.endswith("DICOMDIR"):
+                continue
             zip_path = get_zip_path(filename)
             if zip_path:
                 self._load_zipfile(filename)
