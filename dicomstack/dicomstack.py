@@ -289,7 +289,7 @@ class DicomStack(object):
             if reorder:
                 # sort by location
                 try:
-                    stack = self.reorder()
+                    stack = stack.reorder()
                 except ValueError:
                     raise NotImplementedError("Could not define sorting method")
             # single non-indexed volume
@@ -374,6 +374,11 @@ class DicomStack(object):
                 self._load_zipfile(filename)
             else:
                 self._load_file(filename)
+
+        # duplicates
+        nframes = len(self.unique("SOPInstanceUID"))
+        if len(self) != nframes:
+            LOGGER.warning(f"{len(self) - nframes} duplicated frames were found")
 
     def _load_file(self, filename):
         """ load single Dicom file """
