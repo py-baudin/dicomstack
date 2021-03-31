@@ -259,7 +259,7 @@ class DicomStack(object):
         if len(self.unique(field)) == len(self):
             return self.sort(field)
         else:
-            raise ValueError("Could not sort stack spatially")
+            raise ValueError("Could not sort stack spatially: non-unique slice locations")
 
     def has_field(self, field, how="all"):
         """ return True if all frame have the given field """
@@ -288,10 +288,7 @@ class DicomStack(object):
 
             if reorder:
                 # sort by location
-                try:
-                    stack = stack.reorder()
-                except ValueError:
-                    raise NotImplementedError("Could not define sorting method")
+                stack = stack.reorder()
             # single non-indexed volume
             return pixeldata.make_volume(stack.frames, rescale=rescale)
 
@@ -321,10 +318,7 @@ class DicomStack(object):
 
             if reorder:
                 # sort by location
-                try:
-                    substack = substack.reorder()
-                except ValueError:
-                    raise NotImplementedError("Could not defined sorting method")
+                substack = substack.reorder()
 
             volume = pixeldata.make_volume(substack.frames, rescale=rescale)
             volumes.append(volume)
