@@ -361,7 +361,7 @@ class DicomStack(object):
         """ load filenames """
         for filename in filenames:
             # skip DICOMDIR
-            if filename.endswith("DICOMDIR"):
+            if str(filename).endswith("DICOMDIR"):
                 continue
             zip_path = get_zip_path(filename)
             if zip_path:
