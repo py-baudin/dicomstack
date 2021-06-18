@@ -232,9 +232,9 @@ class DicomStack(object):
         """ return the image acquisition axis with respect to the patient """
         orient = self.single("ImageOrientationPatient")
         vec = (
-            orient[1] * orient[5] - orient[2] * orient[4],
-            orient[0] * orient[5] - orient[2] * orient[3],
-            orient[0] * orient[4] - orient[1] * orient[3],
+            abs(orient[1] * orient[5] - orient[2] * orient[4]),
+            abs(orient[0] * orient[5] - orient[2] * orient[3]),
+            abs(orient[0] * orient[4] - orient[1] * orient[3]),
         )
         return vec.index(max(vec))
 
@@ -242,18 +242,7 @@ class DicomStack(object):
         """ reindex stack based on spatial information """
         if len(self) <= 1:
             return self
-
-        # wrong
-        # if len(self.unique("InStackPositionNumber")) == len(self):
-        #     return self.sort("InStackPositionNumber")
-        #
-        # if len(self.unique("SliceLocation")) == len(self):
-        #     return self.sort("SliceLocation")
-        #
-        # if len(self.unique("InStackPositionNumber")) == len(self):
-        #     return self.sort("InStackPositionNumber")
-
-        # else use ImagePositionPatient
+        # use ImagePositionPatient
         axis = self.getaxis()
         field = f"ImagePositionPatient_{axis + 1}"
         if len(self.unique(field)) == len(self):
