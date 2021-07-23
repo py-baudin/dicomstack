@@ -9,25 +9,25 @@ import pydicom
 
 @pytest.fixture(scope="session")
 def brainfile():
-    """ brain filename """
+    """brain filename"""
     return os.path.join(os.path.dirname(__file__), "MRBRAIN.DCM")
 
 
 @pytest.fixture()
 def brain(brainfile):
-    """ load brain dataset """
+    """load brain dataset"""
     return pydicom.dcmread(brainfile)
 
 
 @pytest.fixture()
 def legsfile():
-    """ brain filename """
+    """brain filename"""
     return os.path.join(os.path.dirname(__file__), "MRLEGS.DCM")
 
 
 @pytest.fixture()
 def legs(legsfile):
-    """ load brain dataset """
+    """load brain dataset"""
     return pydicom.dcmread(brainfile)
 
 

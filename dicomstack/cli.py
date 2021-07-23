@@ -7,7 +7,7 @@ from . import utils, dicomstack
 
 
 def cli():
-    """ entry point into command-line utility """
+    """entry point into command-line utility"""
 
     # make parser
     parser = argparse.ArgumentParser("dicom", description="Various DICOM utils")
@@ -29,7 +29,7 @@ def cli():
 
 
 def cli_tags(subparser):
-    """ show DICOM tags for one frame """
+    """show DICOM tags for one frame"""
 
     parser_anonymize = subparser.add_parser(
         "tags", help="Show DICOM tags for one frame."
@@ -66,7 +66,7 @@ def cli_tags(subparser):
 
 
 def cli_view(subparser):
-    """ show DICOM values for one or more tags """
+    """show DICOM values for one or more tags"""
 
     parser_anonymize = subparser.add_parser(
         "view", help="Show unique DICOM values of one or more tags."
@@ -96,7 +96,7 @@ def cli_view(subparser):
 
 
 def cli_list(subparser):
-    """ describe DICOM stack """
+    """describe DICOM stack"""
 
     parser_anonymize = subparser.add_parser(
         "list", help="List studies, series and non-DICOM files."
@@ -114,7 +114,7 @@ def cli_list(subparser):
 
 
 def cli_anonymize(subparser):
-    """ anonymize DICOM """
+    """anonymize DICOM"""
 
     # parser
     parser_anonymize = subparser.add_parser(
@@ -160,7 +160,7 @@ def cli_anonymize(subparser):
 
 
 def dicom_filters(value):
-    """ return (tag,value) pairs """
+    """return (tag,value) pairs"""
     filters = {}
     for tag_value in value.split(","):
         tag, value = tag_value.strip().split("=")

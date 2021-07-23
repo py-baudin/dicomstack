@@ -11,7 +11,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def anonymize_stack(src, dest, prefix=None, **kwargs):
-    """ anonymize whole dicom stack """
+    """anonymize whole dicom stack"""
     outfile = None
     anonymized = []
 
@@ -32,7 +32,7 @@ def anonymize_stack(src, dest, prefix=None, **kwargs):
 
 
 def anonymize_file(src, dest, filename=None, remove_private_tags=True, overwrite=False):
-    """ anonymize dicom file """
+    """anonymize dicom file"""
 
     # read dicom
     dataset = pydicom.dcmread(src)
@@ -120,7 +120,7 @@ def write_dataset(
 
 
 def update_dataset(dataset, data=None, dtype="uint16", **tags):
-    """ update existing dataset """
+    """update existing dataset"""
     if data is None:
         data = dataset.PixelData
     newtags = {tag.keyword: dataset[tag.tag] for tag in dataset}
@@ -129,7 +129,7 @@ def update_dataset(dataset, data=None, dtype="uint16", **tags):
 
 
 def make_dataset(data, dtype="uint16", **tags):
-    """ make valid DICOM dataset """
+    """make valid DICOM dataset"""
     dataset = pydicom.Dataset()
 
     # date time

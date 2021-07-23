@@ -12,13 +12,13 @@ else:
 
 
 def check_available():
-    """ check functions are available"""
+    """check functions are available"""
     if not AVAILABLE:
         raise NotImplementedError("numpy is required")
 
 
 def available(func):
-    """ decorator """
+    """decorator"""
 
     def wrapped(*args, **kwargs):
         check_available()
@@ -29,7 +29,7 @@ def available(func):
 
 @available
 def make_volume(frames, rescale=True):
-    """ return volume from a sequence of frames"""
+    """return volume from a sequence of frames"""
 
     # find geometry
     nframe = len(frames)
@@ -77,11 +77,10 @@ def make_volume(frames, rescale=True):
 if AVAILABLE:
 
     class DicomVolume(np.ndarray):
-        """ simple layer over np ndarray to add attribute: volume.info
-        """
+        """simple layer over np ndarray to add attribute: volume.info"""
 
         def __new__(cls, input_array, tags=None):
-            """ create Volume object """
+            """create Volume object"""
             # copy the data
             obj = np.asarray(input_array).view(cls)
             obj.tags = tags
@@ -93,11 +92,11 @@ if AVAILABLE:
             self.tags = getattr(obj, "tags", {})
 
         def __reduce__(self):
-            """ prevent pickling """
+            """prevent pickling"""
             raise NotImplementedError("Cannot pickle DicomVolume object")
 
         def __array_wrap__(self, out_arr, context=None):
-            """ propagate metadata if wrap is called """
+            """propagate metadata if wrap is called"""
             return super().__array_wrap__(self, out_arr, context)
 
         def __array_wrap__(self, out_arr, context=None):
@@ -110,7 +109,7 @@ if AVAILABLE:
 
 @available
 def format_pixels(data, dtype="uint8"):
-    """ make tags from ndarray """
+    """make tags from ndarray"""
     tags = {}
     data = np.asarray(data)
 

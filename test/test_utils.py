@@ -11,7 +11,7 @@ from dicomstack import utils, dicomstack
 
 
 def test_make_dataset():
-    """ test creating dataset """
+    """test creating dataset"""
     data = np.arange(3 * 4, dtype="uint8").reshape((3, 4))
     ds = utils.make_dataset(data, PatientName="Foo Bar")
     assert ds.PatientName == "Foo Bar"
@@ -21,7 +21,7 @@ def test_make_dataset():
 
 
 def test_write_dataset(tmpdir):
-    """ test writing dicom file """
+    """test writing dicom file"""
     filename = tmpdir.join("test.dcm")
     data = np.arange(3 * 4, dtype="uint8").reshape((3, 4))
     utils.write_dataset(data, filename)

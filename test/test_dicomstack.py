@@ -15,7 +15,7 @@ DATA_DIR = join(dirname(dirname(dicomstack.__file__)), "data")
 
 
 def test_parse_keys():
-    """ test _parse_field """
+    """test _parse_field"""
     assert dicomstack.parse_keys("Field") == (["Field"], None)
     assert dicomstack.parse_keys("Field_1") == (["Field"], 0)
     assert dicomstack.parse_keys("Field.1.Subfield") == (["Field", 0, "Subfield"], None)
@@ -115,7 +115,7 @@ def test_dicomfile_multi(multi):
 
 
 def test_get_zip_path():
-    """ test get zippath """
+    """test get zippath"""
     assert dicomstack.get_zip_path(join("some", "simple", "path")) == None
     assert dicomstack.get_zip_path(join("some", "zipped.zip", "path")) == join(
         "some", "zipped.zip"
@@ -123,7 +123,7 @@ def test_get_zip_path():
 
 
 def test_dicomstack_empty():
-    """ test dicomstack class """
+    """test dicomstack class"""
 
     # empty path
     stack = dicomstack.DicomStack("unknown")
@@ -132,7 +132,7 @@ def test_dicomstack_empty():
 
 
 def test_dicomstack_nondicom(tmpdir):
-    """ test dicomstack class """
+    """test dicomstack class"""
 
     # create non dicom data
     file1 = tmpdir.join("file1.txt")
@@ -155,7 +155,7 @@ def test_dicomstack_nondicom(tmpdir):
 
 
 def test_dicomstack_single(legsfile):
-    """ test DicomStack with single file """
+    """test DicomStack with single file"""
 
     path = legsfile
     stack = dicomstack.DicomStack(path)
@@ -230,6 +230,17 @@ def test_dicomstack_single(legsfile):
     tree2 = json.loads(json.dumps(tree))
     assert tree2 == tree
 
+    # queries
+    assert stack[stack.Modality] == ["MR"]
+    assert stack[stack.Manufacturer, stack.Modality] == [("SIEMENS", "MR")]
+    assert stack[stack.ImageType[0]] == ["ORIGINAL"]
+    assert stack[stack.StudyID] == [None]
+    with pytest.raises(KeyError):
+        stack[stack.UnknownField]
+
+    assert not stack(stack.Modality == "FOOBAR")
+    assert stack(stack.Modality == "MR")
+
 
 def test_dicomstack_zipped(legszip):
     path = legszip
@@ -284,3 +295,14 @@ def test_dicomstack_multi(multi):
     origin = tuple(stack.frames[0]["ImagePositionPatient"])
     assert np.all(np.isclose(volume.tags["spacing"], spacing + (slice_spacing,)))
     assert volume.tags["origin"] == origin
+
+    # queries
+    filtered = stack(stack.EchoTime == echo_times[0])
+    assert filtered
+    assert all(value == echo_times[0] for value in filtered[stack.EchoTime])
+
+    assert not stack(stack.EchoTime < 0)
+    assert stack(stack.EchoTime < 10)
+    assert stack(stack.EchoTime.is_in(echo_times[:2]))
+    assert stack((stack.EchoTime < 10) | (stack.EchoTime > 30))
+    assert not stack((stack.EchoTime < 10) & (stack.EchoTime > 30))
