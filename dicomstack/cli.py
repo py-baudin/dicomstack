@@ -1,6 +1,9 @@
 """ DICOM utils cli """
 # coding=utf-8
 import os
+import csv
+import json
+import logging
 import argparse
 
 from . import utils, dicomstack
@@ -120,14 +123,14 @@ def cli_anonymize(subparser):
     parser_anonymize = subparser.add_parser(
         "anonymize", help="Create anonymous copy of DICOM data"
     )
-    parser_anonymize.add_argument("src", help="Source file or directory")
-    parser_anonymize.add_argument("dest", help="Destination directory")
+    parser_anonymize.add_argument("src", help="Source file or directory.")
+    parser_anonymize.add_argument("dest", help="Destination directory.")
     parser_anonymize.add_argument(
         "-n",
         "--filename",
         help=(
             "Filename (if src is a single file) or file prefix (src is a directory). "
-            "Default: keep original names"
+            "Default: keep original names."
         ),
     )
     parser_anonymize.add_argument(
@@ -135,7 +138,19 @@ def cli_anonymize(subparser):
         "--overwrite",
         default=False,
         action="store_true",
-        help="Replace existing files",
+        help="Overwrite existing files.",
+    )
+    parser_anonymize.add_argument(
+        "-t",
+        "--table",
+        help="Mapping table filename in CSV or JSON format. "
+        "CSV: use ;-delimited format, the first column being the mapping key.",
+    )
+    parser_anonymize.add_argument(
+        "-k",
+        "--map-key",
+        default="Patient ID",
+        help="DICOM tag to use as the key in the mapping table (default: 'Patient ID').",
     )
 
     def _anonymize(args):
@@ -143,18 +158,35 @@ def cli_anonymize(subparser):
         dest = args.dest
         name = args.filename
         overwrite = args.overwrite
+        maptable = args.table
+        mapkey = args.map_key
+
+        if maptable:
+            if maptable.endswith(".csv"):
+                with open(maptable, newline="") as csvfile:
+                    csvtable = list(csv.reader(csvfile, dialect="excel", delimiter=";"))
+                    # maptable = reader.read()
+                # refactor
+                index = csvtable[0][1:]
+                maptable = {row[0]: dict(zip(index, row[1:])) for row in csvtable[1:]}
+
+            elif maptable.endswith(".json"):
+                with open(maptable) as jsonfile:
+                    maptable = json.load(jsonfile)
+            else:
+                print(f"Unknown table format: {maptable}")
+                exit()
+
+        logging.basicConfig(level=logging.INFO)
+        opts = dict(overwrite=overwrite, mapper=maptable, mapkey=mapkey)
 
         if os.path.isfile(src):
-            filename = utils.anonymize_file(
-                src, dest, filename=name, overwrite=overwrite
-            )
+            filename = utils.anonymize_file(src, dest, **opts)
             files = [filename]
         else:
-            files = utils.anonymize_stack(src, dest, prefix=name, overwrite=overwrite)
+            files = utils.anonymize_stack(src, dest, prefix=name, **opts)
 
-        print("The following files were anonymized:")
-        for filename in files:
-            print("\t", filename)
+        print(f"{len(files)} files were created in '{args.dest}'")
 
     parser_anonymize.set_defaults(func=_anonymize)
 

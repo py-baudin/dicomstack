@@ -1,6 +1,7 @@
 """ DICOM tools """
 # coding=utf-8
 import os
+import pathlib
 import datetime
 import uuid
 import logging
@@ -9,39 +10,139 @@ from . import pixeldata
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_MAPPER = {
+    "Patient's Name": "Anonymous",
+    "Patient ID": "",
+    "Patient's Sex": "O",
+}
+
+FIELDS_TYPE_2 = [
+    "Accession Number",
+    "Referring Physician's Name",
+    "Patient's Name",
+    "Patient ID",
+    "Patient's Birth Date",
+    "Patient's Sex",
+]
+
+FIELDS_TYPE_3 = [
+    # "Instance Creator UID",
+    "Institution Name",
+    "Institution Address",
+    "Referring Physician's Address",
+    "Referring Physician's Telephone Numbers",
+    "Station Name",
+    "Study Description",
+    "Series Description",
+    "Institutional Department Name",
+    # "Physician(s) of Record",
+    "Performing Physicians' Name",
+    # "Name of Physician(s) Reading study",
+    # "Operator's Name",
+    "Admitting Diagnoses Description",
+    "Derivation Description",
+    "Patient's Birth Time",
+    "Other Patient IDs",
+    "Other Patient Names",
+    "Patient's Age",
+    "Patient's Size",
+    "Patient's Weight",
+    "Medical Record Locator",
+    "Ethnic Group",
+    "Occupation",
+    "Additional Patient's History",
+    "Patient Comments",
+    "Device Serial Number",
+    "Protocol Name",
+    "Image Comments",
+    "Request Attributes Sequence",
+    "Storage Media File-Set UID",
+    # "Related Frame of Reference UID",
+]
+
+
+def tame_field(name):
+    """tame DICOM field"""
+
+    for char in ["'s", "s'", "-", "(", ")"]:
+        name = name.replace(char, "")
+    return name.replace(" ", "")
+
 
 def anonymize_stack(src, dest, prefix=None, **kwargs):
     """anonymize whole dicom stack"""
     outfile = None
     anonymized = []
+    dest = pathlib.Path(dest)
 
     for root, dirs, files in os.walk(src):
+        root = pathlib.Path(root)
         nfile = len(files)
+        if not any(pydicom.misc.is_dicom(root / file) for file in files):
+            continue
+        LOGGER.info(f"Converting folder: '{root.relative_to(src)}'")
         for i, filename in enumerate(files):
             if prefix:
                 outfile = f"{prefix}{i+1:{nfile}}"
+            else:
+                outfile = filename
 
-            infile = os.path.join(root, filename)
-            outdir = os.path.join(dest, os.path.relpath(root, src))
+            infile = root / filename
+            outfile = dest / root.relative_to(src) / outfile
+            LOGGER.debug(f"Loading file: {infile.relative_to(src)}")
             try:
-                filename = anonymize_file(infile, outdir, filename=outfile, **kwargs)
+                filename = anonymize_file(infile, outfile, **kwargs)
             except pydicom.errors.InvalidDicomError:
                 continue
             anonymized.append(filename)
     return anonymized
 
 
-def anonymize_file(src, dest, filename=None, remove_private_tags=True, overwrite=False):
+def anonymize_file(
+    src,
+    dest,
+    mapper=None,
+    mapkey="PatientID",
+    remove_private_tags=True,
+    overwrite=False,
+):
     """anonymize dicom file"""
 
     # read dicom
-    dataset = pydicom.dcmread(src)
+    dataset = pydicom.dcmread(str(src))
+
+    # patient's id for mapping
+    mapkey = tame_field(mapkey)
+    patient_id = dataset.data_element(mapkey).value
+    if not mapper:
+        mapper = {}
+    custom_mapper = {**DEFAULT_MAPPER, **mapper.get(patient_id, {})}
+
+    # remove private tags
+    if remove_private_tags:
+        LOGGER.debug("remove private tags")
+        dataset.remove_private_tags()
+
+    # Data elements of type 3 (optional) can be easily deleted using ``del``
+    for element_name in FIELDS_TYPE_3:
+        tag = tame_field(element_name)
+        if tag in dataset:
+            LOGGER.debug(f"Remove type-3 field: {element_name}")
+            delattr(dataset, tag)
+
+    # For data elements of type 2, assign a blank string.
+    for element_name in FIELDS_TYPE_2:
+        tag = tame_field(element_name)
+        LOGGER.debug(f"Erase type-2 field: {element_name}")
+        dataset.data_element(tag).value = ""
 
     #  callback functions to find all tags corresponding to a person name
     def person_names_callback(dataset, data_element):
         if data_element.VR == "PN":
-            data_element.value = "Anonymous"
+            LOGGER.debug(f"Erasing person's name: {data_element}")
+            data_element.value = ""
 
+    # remove deprecated fields
     def curves_callback(dataset, data_element):
         if data_element.tag.group & 0xFF00 == 0x5000:
             del dataset[data_element.tag]
@@ -50,29 +151,19 @@ def anonymize_file(src, dest, filename=None, remove_private_tags=True, overwrite
     dataset.walk(person_names_callback)
     dataset.walk(curves_callback)
 
-    # remove private tags
-    if remove_private_tags:
-        dataset.remove_private_tags()
-
-    # Data elements of type 3 (optional) can be easily deleted using ``del`
-    # for element_name in data_elements:
-    #     delattr(dataset, element_name)
-
-    # For data elements of type 2, assign a blank string.
-    # tag = 'PatientBirthDate'
-    # if tag in dataset:
-    #     dataset.data_element(tag).value = '19000101'
+    # map specific fields
+    for element_name in custom_mapper:
+        tag = tame_field(element_name)
+        LOGGER.debug(f"Map field: {element_name} to {custom_mapper[element_name]}")
+        dataset.data_element(tag).value = custom_mapper[element_name]
 
     # save
-    if not os.path.exists(dest):
-        os.makedirs(dest)
-    if not filename:
-        filename = os.path.basename(src)
-    filepath = os.path.join(dest, filename)
-    if os.path.isfile(filepath) and not overwrite:
-        raise ValueError("Destination file already exists: %s" % filepath)
-    dataset.save_as(filepath)
-    return filepath
+    dest = pathlib.Path(dest)
+    dest.parent.mkdir(exist_ok=True, parents=True)
+    if dest.is_file() and not overwrite:
+        raise ValueError("Destination file already exists: %s" % dest)
+    dataset.save_as(str(dest))
+    return dest
 
 
 def write_dataset(
