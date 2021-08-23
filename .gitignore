@@ -7,3 +7,4 @@ Pipfile*
 dist/
 build/
 test_data/
+venv/
