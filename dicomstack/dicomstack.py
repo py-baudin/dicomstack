@@ -189,16 +189,28 @@ class DicomStack(object):
             return self._select(name)
         return getattr(super(), name)
 
-    def single(self, *fields, default=...):
+    def single(self, *fields, default=..., precision=None):
         """return single value for field"""
-        values = list(set(self.get_field_values(*fields, ignore_missing=True)))
+        values = self.get_field_values(*fields, ignore_missing=True)
+        if precision is not None:
+            try:
+                if isinstance(values[0], tuple):
+                    # sequence
+                    values = [tuple(round(value, precision) for value in seq) for seq in values]
+                else:
+                    # single value
+                    values = [round(item, precision) for item in values]
+            except TypeError:
+                pass
+        values = set(values)
+
         if len(values) > 1:
             raise ValueError("Multiple values found for %s" % fields)
         elif not values and default is not ...:
             return default
         elif not values:
             raise ValueError("No value found for %s" % fields)
-        return values[0]
+        return values.pop()
 
     def unique(self, *fields):
         """return unique values for field"""
@@ -248,7 +260,7 @@ class DicomStack(object):
 
     def getaxis(self):
         """return the image acquisition axis with respect to the patient"""
-        orient = self.single("ImageOrientationPatient")
+        orient = self.single("ImageOrientationPatient", precision=3)
         vec = (
             abs(orient[1] * orient[5] - orient[2] * orient[4]),
             abs(orient[0] * orient[5] - orient[2] * orient[3]),
