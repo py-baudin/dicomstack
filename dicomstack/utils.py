@@ -1,6 +1,7 @@
 """ DICOM tools """
 # coding=utf-8
 import os
+import pathlib
 import datetime
 import uuid
 import logging
@@ -9,70 +10,189 @@ from . import pixeldata
 
 LOGGER = logging.getLogger(__name__)
 
+# Fields to de-identify
 
-def anonymize_stack(src, dest, prefix=None, **kwargs):
-    """anonymize whole dicom stack"""
+FIELDS_TYPE_2 = [
+    "Accession Number",
+    "Referring Physician's Name",
+    "Patient's Name",
+    "Patient ID",
+    "Patient's Birth Date",
+    "Patient's Sex",
+]
+
+FIELDS_TYPE_3 = [
+    # "Instance Creator UID",
+    "Institution Name",
+    "Institution Address",
+    "Referring Physician's Address",
+    "Referring Physician's Telephone Numbers",
+    "Station Name",
+    # "Study Description", # keep those
+    # "Series Description", # keep those
+    "Institutional Department Name",
+    # "Physician(s) of Record",
+    "Performing Physicians' Name",
+    # "Name of Physician(s) Reading study", ?
+    # "Operator's Name", ?
+    "Admitting Diagnoses Description",
+    "Derivation Description",
+    "Patient's Birth Time",
+    "Other Patient IDs",
+    "Other Patient Names",
+    "Patient's Age",
+    "Patient's Size",
+    "Patient's Weight",
+    "Medical Record Locator",
+    "Ethnic Group",
+    "Occupation",
+    "Additional Patient's History",
+    "Patient Comments",
+    "Device Serial Number",
+    # "Protocol Name",  # keep those
+    "Image Comments",
+    "Request Attributes Sequence",
+    "Storage Media File-Set UID",
+    # "Related Frame of Reference UID",
+]
+
+
+class MappingTableError(Exception):
+    pass
+
+
+def tame_field(name):
+    """tame DICOM field"""
+
+    for char in ["'s", "s'", "-", "(", ")"]:
+        name = name.replace(char, "")
+    return name.replace(" ", "")
+
+
+def export_stack(src, dest, prefix=None, **kwargs):
+    """export/anonymize whole dicom stack"""
     outfile = None
     anonymized = []
+    dest = pathlib.Path(dest)
 
     for root, dirs, files in os.walk(src):
+        root = pathlib.Path(root)
         nfile = len(files)
+        if not any(pydicom.misc.is_dicom(root / file) for file in files):
+            continue
+        LOGGER.info(f"Converting folder: '{root.relative_to(src)}'")
+        errors = set()
         for i, filename in enumerate(files):
             if prefix:
                 outfile = f"{prefix}{i+1:{nfile}}"
+            else:
+                outfile = filename
 
-            infile = os.path.join(root, filename)
-            outdir = os.path.join(dest, os.path.relpath(root, src))
+            infile = root / filename
+            outfile = dest / root.relative_to(src) / outfile
+            LOGGER.debug(f"Loading file: {infile.relative_to(src)}")
             try:
-                filename = anonymize_file(infile, outdir, filename=outfile, **kwargs)
-            except pydicom.errors.InvalidDicomError:
+                filename = export_file(infile, outfile, **kwargs)
+            except (
+                FileExistsError,
+                MappingTableError,
+                pydicom.errors.InvalidDicomError,
+            ) as exc:
+                strexc = str(exc)
+                if not strexc in errors:
+                    LOGGER.info(exc)
+                    errors.add(strexc)
                 continue
             anonymized.append(filename)
     return anonymized
 
 
-def anonymize_file(src, dest, filename=None, remove_private_tags=True, overwrite=False):
-    """anonymize dicom file"""
+def export_file(
+    src,
+    dest,
+    mapper=None,
+    mapkey=None,
+    anonymize=True,
+    remove_private_tags=True,
+    overwrite=False,
+):
+    """export/anonymize dicom file
+
+    mapper: dict of DICOM tag/values, or dict of.
+    mapkey: use DICOM tag as mapping key in mapper
+    """
 
     # read dicom
-    dataset = pydicom.dcmread(src)
+    dataset = pydicom.dcmread(str(src))
 
-    #  callback functions to find all tags corresponding to a person name
-    def person_names_callback(dataset, data_element):
-        if data_element.VR == "PN":
-            data_element.value = "Anonymous"
+    # mapping table
+    if mapper is None:
+        mapper = {}
+    elif mapkey is None:
+        mapper = mapper
+    else:
+        # patient's id for mapping
+        mapkey = tame_field(mapkey)
+        if not mapkey in dataset:
+            raise MappingTableError(f"Unkown tag: {mapkey}")
+        id = dataset.data_element(mapkey).value
+        if not id in mapper:
+            # raise
+            raise MappingTableError(f"Missing index: '{id}' in mapping table.")
+        # use custom mapper
+        mapper = mapper.get(id, {})
 
+    # remove private tags
+    if remove_private_tags:
+        LOGGER.debug("remove private tags")
+        dataset.remove_private_tags()
+
+    # remove deprecated fields
     def curves_callback(dataset, data_element):
         if data_element.tag.group & 0xFF00 == 0x5000:
             del dataset[data_element.tag]
 
-    # run callback functions
-    dataset.walk(person_names_callback)
     dataset.walk(curves_callback)
 
-    # remove private tags
-    if remove_private_tags:
-        dataset.remove_private_tags()
+    if anonymize:
+        # Data elements of type 3 (optional) can be easily deleted using ``del``
+        for element_name in FIELDS_TYPE_3:
+            tag = tame_field(element_name)
+            if tag in dataset:
+                LOGGER.debug(f"Remove type-3 field: {element_name}")
+                delattr(dataset, tag)
 
-    # Data elements of type 3 (optional) can be easily deleted using ``del`
-    # for element_name in data_elements:
-    #     delattr(dataset, element_name)
+        # For data elements of type 2, assign a blank string.
+        for element_name in FIELDS_TYPE_2:
+            tag = tame_field(element_name)
+            LOGGER.debug(f"Erase type-2 field: {element_name}")
+            dataset.data_element(tag).value = ""
 
-    # For data elements of type 2, assign a blank string.
-    # tag = 'PatientBirthDate'
-    # if tag in dataset:
-    #     dataset.data_element(tag).value = '19000101'
+        #  callback functions to find all tags corresponding to a person name
+        def person_names_callback(dataset, data_element):
+            if data_element.VR == "PN":
+                LOGGER.debug(f"Erasing person's name: {data_element}")
+                data_element.value = ""
+
+        # run callback functions
+        dataset.walk(person_names_callback)
+
+    # map specific fields
+    for element_name in mapper:
+        tag = tame_field(element_name)
+        LOGGER.debug(f"Map field: {element_name} to {mapper[element_name]}")
+        try:
+            dataset.data_element(tag).value = mapper[element_name]
+        except AttributeError:
+            raise MappingTableError(f"Unknown tag: {tag}")
 
     # save
-    if not os.path.exists(dest):
-        os.makedirs(dest)
-    if not filename:
-        filename = os.path.basename(src)
-    filepath = os.path.join(dest, filename)
-    if os.path.isfile(filepath) and not overwrite:
-        raise ValueError("Destination file already exists: %s" % filepath)
-    dataset.save_as(filepath)
-    return filepath
+    dest = pathlib.Path(dest)
+    dest.parent.mkdir(exist_ok=True, parents=True)
+    if dest.is_file() and not overwrite:
+        raise FileExistsError("Destination file already exists: '%s'" % dest)
+    dataset.save_as(str(dest))
+    return dest
 
 
 def write_dataset(
