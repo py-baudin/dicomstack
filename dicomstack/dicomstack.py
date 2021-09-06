@@ -679,7 +679,10 @@ def list_files(path):
         # glob relative paths
         subpaths = list(pathlib.Path().glob(str(path)))
     else:
-        subpaths = [pathlib.Path(path)]
+        path = pathlib.Path(path)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        subpaths = [path]
 
     for subpath in subpaths:
         if subpath.is_file():
