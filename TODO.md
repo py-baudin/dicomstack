@@ -1,23 +1,6 @@
 # TODO
 
-
-## Add query-style `Field` object:
-
-```
-stack(Field.EchoTime == 1)
-stack(Field.EchoTime > 2)
-stack(Field.EchoTime in [1,2])
-etc.
-
-also: get values
-stack[Field.EchoTime]
-
-```
-
-keep legacy query:
-```
-stack(EchoTime=1)
-stack(EchoTime=[1,2])
-stack["EchoTime"]
-etc.
-```
+## misc
+- handle UID objects
+  - auto-translate UID strings to names, using pydicom.uid.UID_dictionary
+  - handle in queries: `stack.SOPClassUID == Raw Data Storage`
