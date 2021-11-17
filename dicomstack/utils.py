@@ -113,7 +113,7 @@ def export_file(
     mapper=None,
     mapkey=None,
     anonymize=True,
-    remove_private_tags=True,
+    remove_private_tags=False,
     overwrite=False,
 ):
     """export/anonymize dicom file

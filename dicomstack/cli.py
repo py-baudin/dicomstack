@@ -166,6 +166,12 @@ def cli_export(subparser):
         help="Dot not remove personal data.",
     )
     parser_export.add_argument(
+        "--remove-private",
+        default=False,
+        action="store_true",
+        help="Remove private fields.",
+    )
+    parser_export.add_argument(
         "-t",
         "--map-table",
         metavar="TABLE",
@@ -186,6 +192,7 @@ def cli_export(subparser):
         maptable = args.map_table
         mapkey = args.map_key
         anonymize = not args.dont_anonymize
+        remove_private = args.remove_private
 
         if maptable:
             if maptable.endswith(".csv"):
@@ -208,7 +215,11 @@ def cli_export(subparser):
 
         logging.basicConfig(level=logging.INFO)
         opts = dict(
-            overwrite=overwrite, mapper=maptable, mapkey=mapkey, anonymize=anonymize
+            overwrite=overwrite,
+            mapper=maptable,
+            mapkey=mapkey,
+            anonymize=anonymize,
+            remove_private_tags=remove_private,
         )
 
         if os.path.exists(dest):
