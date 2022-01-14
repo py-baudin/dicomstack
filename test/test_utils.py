@@ -49,29 +49,8 @@ def test_anonymize_file(tmpdir, legsfile):
     path = legsfile
 
     dest = tmpdir.mkdir("test")
-    utils.anonymize_file(path, dest)
+    utils.export_file(path, dest / "MRLEGS.DCM", mapper={"PatientName": "Anonymous"})
     assert "MRLEGS.DCM" in os.listdir(dest)
     stack = dicomstack.DicomStack(dest)
     assert len(stack) == 1
     assert stack.single("PatientName") == "Anonymous"
-
-    utils.anonymize_file(path, dest, filename="test.dcm")
-    assert "test.dcm" in os.listdir(dest)
-    stack = dicomstack.DicomStack(dest)
-    assert len(stack) == 2
-    assert stack.single("PatientName") == "Anonymous"
-
-
-# to fix
-# def test_anonymize_stack(tmpdir, legsfile):
-#     path = os.path.dirname(legsfile)
-#     dest = tmpdir.mkdir("test1")
-#
-#     utils.anonymize_stack(path, dest)
-#     assert "avanto_T1w" in os.listdir(dest)
-#     assert "file1" in os.listdir(dest.join("avanto_T1w"))
-#     assert "file2" in os.listdir(dest.join("ingenia_multiecho_enhanced"))
-#
-#     dest = tmpdir.mkdir("test2")
-#     utils.anonymize_stack(join(path, "avanto_T1w"), dest, prefix="foobar_")
-#     assert "foobar_1" in os.listdir(dest)

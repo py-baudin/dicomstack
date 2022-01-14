@@ -10,16 +10,16 @@ from . import utils, dicomstack
 
 
 def cli():
-    """entry point into command-line utility"""
+    """Entry point into command-line utility"""
 
     # make parser
-    parser = argparse.ArgumentParser("dicom", description="Various DICOM utils")
+    parser = argparse.ArgumentParser("dicom", description="Various DICOM utilities.")
 
     # add subprograms
     subparser = parser.add_subparsers()
     cli_list(subparser)
-    cli_tags(subparser)
     cli_view(subparser)
+    cli_values(subparser)
     cli_export(subparser)
 
     # parse arguments
@@ -31,24 +31,25 @@ def cli():
         print(parser.print_help())
 
 
-def cli_tags(subparser):
-    """show DICOM tags for one frame"""
+def cli_view(subparser):
+    """show DICOM elements for one frame"""
 
-    parser_export = subparser.add_parser("tags", help="Show DICOM tags for one frame.")
-    parser_export.add_argument("src", help="Source file or directory")
-    parser_export.add_argument(
+    help = "List the DICOM elements of one frame."
+    parser = subparser.add_parser("elements", help=help, description=help)
+    parser.add_argument("src", help="Source file or directory")
+    parser.add_argument(
         "-i",
         dest="index",
         type=int,
         default=1,
-        help="Show tags for i-th frame (default: 1).",
+        help="Show elements of i-th frame (default: 1).",
     )
-    parser_export.add_argument("--series", type=int, help="Filter by series number.")
-    parser_export.add_argument(
-        "-f", "--filters", type=dicom_filters, help="Filter by tag=value,... pairs."
+    parser.add_argument("--series", type=int, help="Filter by series number.")
+    parser.add_argument(
+        "-f", "--filters", type=dicom_filters, help="Filter by element=value,... pairs."
     )
 
-    def _tags(args):
+    def _elements(args):
         # load stack
         stack = dicomstack.DicomStack(args.src)
 
@@ -58,28 +59,32 @@ def cli_tags(subparser):
         if args.filters:
             stack = stack(**args.filters)
 
-        # show dicom tags
+        # show dicom elements
         frame = stack.frames[args.index - 1]
-        frame.elements
+        # load elements
+        frame.dataset.elements
         print(frame)
 
-    parser_export.set_defaults(func=_tags)
+    parser.set_defaults(func=_elements)
 
 
-def cli_view(subparser):
-    """show DICOM values for one or more tags"""
+def cli_values(subparser):
+    """show DICOM values for one or more elements"""
 
-    parser_export = subparser.add_parser(
-        "view", help="Show unique DICOM values of one or more tags."
+    help = "Show unique values of one or more DICOM elements."
+    parser = subparser.add_parser(
+        "values",
+        help=help,
+        description=help,
     )
-    parser_export.add_argument("src", help="Source file or directory")
-    parser_export.add_argument("tags", nargs="+", help="DICOM tags.")
-    parser_export.add_argument("--series", type=int, help="Filter by series number.")
-    parser_export.add_argument(
-        "-f", "--filters", type=dicom_filters, help="Filter by tag=value,... pairs."
+    parser.add_argument("src", help="Source file or directory")
+    parser.add_argument("elements", nargs="+", help="DICOM elements.")
+    parser.add_argument("--series", type=int, help="Filter by series number.")
+    parser.add_argument(
+        "-f", "--filters", type=dicom_filters, help="Filter by element=value,... pairs."
     )
 
-    def _view(args):
+    def _values(args):
         # load stack
         stack = dicomstack.DicomStack(args.src)
 
@@ -89,20 +94,23 @@ def cli_view(subparser):
         if args.filters:
             stack = stack(**args.filters)
 
-        # show dicom tags
-        for tag in args.tags:
-            print(f"{tag}:", stack.unique(tag))
+        # show dicom elements
+        for element in args.elements:
+            print(f"{element}:", stack.unique(element))
 
-    parser_export.set_defaults(func=_view)
+    parser.set_defaults(func=_values)
 
 
 def cli_list(subparser):
     """describe DICOM stack"""
 
-    parser_export = subparser.add_parser(
-        "list", help="List studies, series and non-DICOM files."
+    help = "List DICOM studies, series and non-DICOM files."
+    parser = subparser.add_parser(
+        "list",
+        help=help,
+        description=help,
     )
-    parser_export.add_argument("src", help="Source file or directory")
+    parser.add_argument("src", help="Source file or directory")
 
     def _list(args):
         # load stack
@@ -111,21 +119,21 @@ def cli_list(subparser):
         # show description
         print(stack.describe())
 
-    parser_export.set_defaults(func=_list)
+    parser.set_defaults(func=_list)
 
 
 export_descr = """
 Examples:
-    # Simply anonymize dicom stacks
+    # Simply anonymize DICOM stacks
     dicom export <source> <destination>
 
-    # Use mapping table to modify values:
+    # Using a mapping table to modify values:
     map.json:
         {"Patient ID": "some id", "Series Description": "some description"}
     dicom export -t map.json <source> <destination>
 
-    # Use mapping table to modify DICOM selectively given
-    # Example, using the 'Patient ID' tag as mapping key:
+    # Using a mapping table to modify DICOM selectively, based on a DICOM element
+    # Example, using the 'Patient ID' field as mapping key:
     table.csv:
             ; Patient ID; Patient's Name
         id1 ; new-id1   ; new-name1
@@ -142,10 +150,11 @@ def cli_export(subparser):
     """anonymize DICOM"""
 
     # parser
+    help = "Export a modified/anonymous copy of a DICOM stack."
     parser_export = subparser.add_parser(
         "export",
-        help="Export a modified/anonymous copy of DICOM data",
-        description="Export a modified/anonymous copy of DICOM data.",
+        help=help,
+        description=help,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=export_descr,
     )
@@ -181,8 +190,8 @@ def cli_export(subparser):
     parser_export.add_argument(
         "-k",
         "--map-key",
-        metavar="TAG",
-        help="DICOM tag to use as key to mapping table (eg. 'Patient ID').",
+        metavar="FIELD",
+        help="DICOM field to use as key to mapping table (eg. 'Patient ID').",
     )
 
     def _export(args):
@@ -247,11 +256,11 @@ def cli_export(subparser):
     parser_export.set_defaults(func=_export)
 
 
-def dicom_filters(value):
-    """return (tag,value) pairs"""
+def dicom_filters(string):
+    """return (element, value) pairs"""
     filters = {}
-    for tag_value in value.split(","):
-        tag, value = tag_value.strip().split("=")
+    for element_value in string.split(","):
+        element, value = element_value.strip().split("=")
         try:
             value = int(value)
         except ValueError:
@@ -259,5 +268,9 @@ def dicom_filters(value):
                 value = float(value)
             except:
                 pass
-        filters[tag] = value
+        filters[element] = value
     return filters
+
+
+if __name__ == "__main__":
+    cli()
