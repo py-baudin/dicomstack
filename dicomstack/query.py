@@ -27,25 +27,25 @@ from typing import Any
 
 
 class Selector:
-    """Store a key for creating queries"""
+    """Store a keys for creating queries"""
 
-    def __init__(self, *key):
-        self.key = key
+    def __init__(self, *keys):
+        self.keys = keys
 
     def __len__(self):
-        return len(self.key)
+        return len(self.keys)
 
     def __repr__(self):
-        return f"<{'.'.join([str(k) for k in self.key])}>"
+        return f"<{'.'.join([str(k) for k in self.keys])}>"
 
     def __getitem__(self, index: int) -> "Selector":
-        return Selector(*(self.key + (index,)))
+        return Selector(*(self.keys + (index,)))
 
     def __getattr__(self, name: str) -> "Selector":
         try:
             getattr(super(), name)
         except AttributeError:
-            return Selector(*(self.key + (name,)))
+            return Selector(*(self.keys + (name,)))
 
     def __iter__(self):
         raise NotImplementedError()
@@ -118,8 +118,8 @@ class Query:
 
     @classmethod
     def from_selector(cls, selector, op, value=None) -> "Query":
-        id = f"__{abs(hash(str(selector.key) + str(op) + str(value)))}__"
-        repr = f"{'.'.join([str(k) for k in selector.key])}<{op}>{value}"
+        id = f"__{abs(hash(str(selector.keys) + str(op) + str(value)))}__"
+        repr = f"{'.'.join([str(k) for k in selector.keys])}<{op}>{value}"
         expr = f"{id}()"
         data = {id: {"selector": selector, "op": op, "value": value, "repr": repr}}
         return cls(expr, data)

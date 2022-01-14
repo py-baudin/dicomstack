@@ -35,7 +35,7 @@ def test_query_class():
 
         def __call__(self, selector):
             value = self.db
-            for item in selector.key:
+            for item in selector.keys:
                 value = value[item]
             return value
 

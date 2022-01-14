@@ -16,9 +16,9 @@ DATA_DIR = join(dirname(dirname(dicomstack.__file__)), "data")
 
 def test_parse_keys():
     """test _parse_field"""
-    assert dicomstack.parse_keys("Field") == (["Field"], None)
-    assert dicomstack.parse_keys("Field_1") == (["Field"], 0)
-    assert dicomstack.parse_keys("Field.1.Subfield") == (["Field", 0, "Subfield"], None)
+    assert dicomstack.parse_keys("Field") == ["Field"]
+    assert dicomstack.parse_keys("Field_1") == ["Field", 0]
+    assert dicomstack.parse_keys("Field.1.Subfield") == ["Field", 0, "Subfield"]
 
     with pytest.raises(ValueError):
         print(dicomstack.parse_keys("Invalid Two"))
@@ -42,40 +42,39 @@ def test_dicomfile_single(legsfile):
     assert dcmfile.pixels.ndim == 2
 
     # get frames
-    frames = dcmfile.get_frames()
+    frames = dcmfile.frames
     assert len(frames) == 1
 
     frame = frames[0]
-    assert frame._elements is None  # elements not loaded yet
+    assert frame._dataset is None  # elements not loaded yet
     assert frame._pixels is None  # pixels not loaded yet
-    assert frame.elements  # this is a property
+    assert frame.dataset  # this is a property
     assert frame.pixels.ndim == 2
 
     # test element
     # single value
-    element = frame.elements["Modality"]
+    element = frame.dataset["Modality"]
     assert element.name == "Modality"
     assert element.VR == "CS"
     assert element.tag == (0x0008, 0x0060)
     assert element.value == "MR"
 
     # multi value
-    element = frame.elements["ImageType"]
+    element = frame.dataset["ImageType"]
     assert isinstance(element.value, tuple)
     assert element.value[0] == "ORIGINAL"
 
     # sequence
-    element = frame.elements["IconImageSequence"]
+    element = frame.dataset["IconImageSequence"]
+    assert element.sequence
     assert isinstance(element.value, list)
-    assert element[0]
+    assert isinstance(element.value[0], dicomstack.DicomDataset)
     with pytest.raises(IndexError):
-        element[1]
-    assert isinstance(element.value[0], dicomstack.OrderedDict)
+        element.value[1]
 
     # test frame getitem
     assert frame["Modality"] == "MR"
     assert frame["Manufacturer"] == "SIEMENS"
-    assert frame[("Modality", "Manufacturer")] == ("MR", "SIEMENS")
     assert frame["ImageType"][0] == "ORIGINAL"
     assert frame["ImageType_1"] == "ORIGINAL"
     assert frame["IconImageSequence.1.Rows"] == 64
@@ -87,6 +86,13 @@ def test_dicomfile_single(legsfile):
     with pytest.raises(IndexError):
         assert frame["IconImageSequence.10.Rows"]
     assert frame.get("IconImageSequence.10.Rows") is None
+
+    # pickle
+    tmp = pickle.dumps(dcmfile)
+    assert hash(dcmfile) == hash(pickle.loads(tmp))
+
+    tmp = pickle.dumps(frame)
+    assert frame == pickle.loads(tmp)
 
 
 def test_dicomfile_multi(multi):
@@ -102,15 +108,15 @@ def test_dicomfile_multi(multi):
     assert dcmfile.pixels.ndim == 3
 
     # get frames
-    frames = dcmfile.get_frames()
+    frames = dcmfile.frames
     assert len(frames) == 90
 
     frame = frames[-1]
 
-    assert frame._elements is None
+    assert frame._dataset is None
     assert frame._pixels is None
     assert frame.index == 89
-    assert "EchoTime" in frame.elements
+    assert "EchoTime" in frame.dataset
     assert frame.pixels.ndim == 2
 
 
@@ -122,11 +128,23 @@ def test_get_zip_path():
     )
 
 
-def test_dicomstack_empty():
+def test_dicom_tag_class():
+    DicomTag = dicomstack.DicomTag
+    assert DicomTag(10, 45) == (10, 45)
+    assert DicomTag(10, "0x2d") == ("0x0a", 45)
+
+
+def test_dicomstack_empty(tmpdir):
     """test dicomstack class"""
 
+    # invalid path
+    with pytest.raises(FileNotFoundError):
+        dicomstack.DicomStack("unknown")
+
+    empty = tmpdir.mkdir("empty")
+
     # empty path
-    stack = dicomstack.DicomStack("unknown")
+    stack = dicomstack.DicomStack(empty)
     assert len(stack) == 0
     assert not stack
 
@@ -156,9 +174,10 @@ def test_dicomstack_nondicom(tmpdir):
 
 def test_dicomstack_single(legsfile):
     """test DicomStack with single file"""
+    DicomStack = dicomstack.DicomStack
 
     path = legsfile
-    stack = dicomstack.DicomStack(path)
+    stack = DicomStack(path)
 
     # check attributes
     assert len(stack) == 1
@@ -167,9 +186,9 @@ def test_dicomstack_single(legsfile):
     assert stack.frames == list(stack)
 
     assert stack.frames[0]["Manufacturer"] == "SIEMENS"
-    assert stack.frames[0].elements["Manufacturer"].tag == (0x8, 0x70)
-    assert stack.frames[0].elements["Manufacturer"].name == "Manufacturer"
-    assert stack.frames[0].elements["Manufacturer"].VR == "LO"
+    assert stack.frames[0].dataset["Manufacturer"].tag == (0x8, 0x70)
+    assert stack.frames[0].dataset["Manufacturer"].name == "Manufacturer"
+    assert stack.frames[0].dataset["Manufacturer"].VR == "LO"
 
     # get field values
     assert stack.get_field_values("Modality") == ["MR"]
@@ -208,13 +227,17 @@ def test_dicomstack_single(legsfile):
     assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.tags["origin"] == origin
 
+    # check for duplicates
+    with pytest.raises(dicomstack.DuplicatedFramesError):
+        stack2 = DicomStack(filenames=[path, path])
+
     # test remove duplicates
-    stack2 = dicomstack.DicomStack.from_frames(stack.frames + stack.frames)
+    stack2 = DicomStack.from_frames(stack.frames + stack.frames)
     assert len(stack2) == 2 * len(stack)
     assert stack2.remove_duplicates()["SOPInstanceUID"] == stack["SOPInstanceUID"]
 
     # from files
-    stack_ = dicomstack.DicomStack(filenames=[legsfile])
+    stack_ = DicomStack(filenames=[legsfile])
     assert stack_.root is None
     assert stack_.filenames == [legsfile]
     assert stack_(Modality="MR").filenames == stack_.filenames
