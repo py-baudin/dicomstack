@@ -56,7 +56,7 @@ def test_dicomfile_single(legsfile):
     element = frame.dataset["Modality"]
     assert element.name == "Modality"
     assert element.VR == "CS"
-    assert element.tag == (0x0008, 0x0060)
+    assert element.tag == (0x08, 0x60)
     assert element.value == "MR"
 
     # multi value
@@ -74,6 +74,8 @@ def test_dicomfile_single(legsfile):
 
     # test frame getitem
     assert frame["Modality"] == "MR"
+    assert frame[(0x08, 0x60)] == "MR"
+    assert frame[("0x08", "0x60")] == "MR"
     assert frame["Manufacturer"] == "SIEMENS"
     assert frame["ImageType"][0] == "ORIGINAL"
     assert frame["ImageType_1"] == "ORIGINAL"
@@ -132,6 +134,7 @@ def test_dicom_tag_class():
     DicomTag = dicomstack.DicomTag
     assert DicomTag(10, 45) == (10, 45)
     assert DicomTag(10, "0x2d") == ("0x0a", 45)
+    assert DicomTag(*DicomTag(10, 45)) == (0x0A, 0x2D)
 
 
 def test_dicomstack_empty(tmpdir):
@@ -186,7 +189,7 @@ def test_dicomstack_single(legsfile):
     assert stack.frames == list(stack)
 
     assert stack.frames[0]["Manufacturer"] == "SIEMENS"
-    assert stack.frames[0].dataset["Manufacturer"].tag == (0x8, 0x70)
+    assert stack.frames[0].dataset["Manufacturer"].tag == (0x08, 0x70)
     assert stack.frames[0].dataset["Manufacturer"].name == "Manufacturer"
     assert stack.frames[0].dataset["Manufacturer"].VR == "LO"
 

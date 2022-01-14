@@ -637,9 +637,10 @@ class DicomDataset:
         """get element"""
         item = None
 
-        if isinstance(key, DicomTag):
+        if DicomTag.is_tag(key):
             # get value by tag
-            element = self.elements_by_tag[key]
+            tag = DicomTag(*key)
+            element = self.elements_by_tag[tag]
 
         elif isinstance(key, str):
             # get value by keyword
@@ -736,6 +737,9 @@ class DicomTag:
     def __repr__(self):
         return f"({self.group:04x}, {self.element:04x})"
 
+    def __iter__(self):
+        return iter((self.group, self.element))
+
     def __eq__(self, other):
         other = type(self)(*other) if isinstance(other, tuple) else other
         return (self.group, self.element) == (other.group, other.element)
@@ -789,30 +793,39 @@ class DicomElement:
 
     def represent(self, level=0, indent="  "):
         """represent DICOM element"""
-        if self.sequence:
-            valuerep = ""
-        elif isinstance(self.value, (list, tuple)):
-            valuerep = "\\".join(map(str, self.value))
-        elif isinstance(self.value, str):
-            valuerep = f"'{self.value}'"
-        else:
-            valuerep = str(self.value)
+
+        def str_repr(value):
+            if value is None:
+                return ""
+            elif isinstance(value, (list, tuple)):
+                return "\\".join(map(str_repr, value))
+            elif isinstance(value, str):
+                return f"'{value}'"
+            else:
+                return str(value)
+
+        # value representation
+        valuerep = "" if self.sequence else str_repr(self.value)
 
         if len(valuerep) > 80:
             valuerep = valuerep[:77] + "..."
 
-        repr = f"{indent * level}{self.tag} {self.VR} {self.VM:>2} {self.name:<64.64}{valuerep:<80.80}"
+        # element representation
+        repr = f"{indent * level}{self.tag} {self.name:<64.64} {self.VR}: {valuerep:<80.80}"
 
-        if self.sequence:
-            for i, dataset in enumerate(self.value):
-                # repr += f"\n{indent * (level + 1)}{'-' * 120}\n"
-                repr += f"\n{indent * level}[{i}]\n"
-                for element in dataset.elements:
-                    repr += element.represent(level + 1, indent=indent)
-                    if element is not dataset.elements[-1]:
-                        repr += "\n"
-                if dataset is self.value[-1]:
-                    repr += f"\n{indent * level}[-]"
+        if not self.sequence:
+            return repr
+
+        # else, if sequence, show sub elements
+        for i, dataset in enumerate(self.value):
+            # repr += f"\n{indent * (level + 1)}{'-' * 120}\n"
+            repr += f"\n{indent * level}[{i}]\n"
+            for element in dataset.elements:
+                repr += element.represent(level + 1, indent=indent)
+                if element is not dataset.elements[-1]:
+                    repr += "\n"
+            if dataset is self.value[-1]:
+                repr += f"\n{indent * level}[-]"
 
         return repr
 
@@ -863,7 +876,7 @@ def parse_element_value(value, VR):
     elif VR in ["UI", "SH", "LT", "PN", "UT"]:  # , "OW"]:
         return str(value)
 
-    elif isinstance(value, pydicom.multival.MultiValue):
+    elif isinstance(value, (pydicom.multival.MultiValue, list, tuple)):
         # if value is an array
         return tuple([parse_element_value(v, VR) for v in value])
 
@@ -885,6 +898,9 @@ def parse_element_value(value, VR):
         except ValueError:
             # invalid time
             return None
+
+    elif VR in ["FD", "FL"]:
+        return float(value)
 
     elif isinstance(value, (pydicom.valuerep.DSfloat, float)):
         # if value is defined as float
