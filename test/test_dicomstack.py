@@ -196,7 +196,9 @@ def test_dicomstack_single(legsfile):
     # get field values
     assert stack.get_field_values("Modality") == ["MR"]
     assert stack["Modality"] == ["MR"]
+    assert stack[(0x08, 0x60)] == ["MR"]
     assert stack["Manufacturer", "Modality"] == [("SIEMENS", "MR")]
+    assert stack["Manufacturer", (0x08, 0x60)] == [("SIEMENS", "MR")]
     assert stack["ImageType_1"] == ["ORIGINAL"]
     assert stack["StudyID"] == [None]
     with pytest.raises(KeyError):
@@ -204,7 +206,9 @@ def test_dicomstack_single(legsfile):
 
     # unique
     assert stack.single("Modality") == "MR"
+    assert stack.single((0x08, 0x60)) == "MR"
     assert stack.unique("Modality") == ["MR"]
+    assert stack.unique((0x08, 0x60)) == ["MR"]
     assert stack.unique("Manufacturer", "ManufacturerModelName", "Modality") == [
         ("SIEMENS", "Avanto", "MR")
     ]

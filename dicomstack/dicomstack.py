@@ -181,7 +181,7 @@ class DicomStack(object):
 
     def __getitem__(self, items):
         """short for get_field_values"""
-        if not isinstance(items, (tuple, list)):
+        if DicomTag.is_tag(items) or not isinstance(items, (tuple, list)):
             items = [items]
         return self.get_field_values(*items)
 
@@ -751,6 +751,8 @@ class DicomTag:
     def is_tag(cls, obj):
         if isinstance(obj, cls):
             return True
+        elif not isinstance(obj, tuple):
+            return False
         try:
             cls(*obj)
         except (ValueError, TypeError):
