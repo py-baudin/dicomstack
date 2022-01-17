@@ -188,7 +188,7 @@ class DicomStack(object):
     def __getattr__(self, name):
         """get stack attribute or init selector"""
         if name[0].isalpha() and name[0].upper() == name[0]:
-            return self._select(name)
+            return self.select(name)
         return getattr(super(), name)
 
     def single(self, *fields, default=..., precision=None):
@@ -390,7 +390,7 @@ class DicomStack(object):
             filtered.append(frame)
         return filtered
 
-    def _select(self, sel):
+    def select(self, sel):
         """return query Selector"""
         if DicomTag.is_tag(sel):
             return Selector(DicomTag(*sel))
@@ -772,11 +772,10 @@ class DicomElement:
         self.value = value
         self.keyword = keyword
 
-
     @classmethod
     def from_element(cls, element):
         keyword = element.keyword
-        if keyword is None and element.name.startswith("["):
+        if not keyword and element.name.startswith("["):
             # automatic keyword
             keyword = re.sub(r"[^\w\[\]]|_", "", element.name)
 
