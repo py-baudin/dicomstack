@@ -769,18 +769,24 @@ class DicomElement:
         self.tag = tag
         self.VR = VR
         self.VM = VM
-        self.keyword = keyword
         self.value = value
+        self.keyword = keyword
+
 
     @classmethod
     def from_element(cls, element):
+        keyword = element.keyword
+        if keyword is None and element.name.startswith("["):
+            # automatic keyword
+            keyword = re.sub(r"[^\w\[\]]|_", "", element.name)
+
         return cls(
             str(element.name),
             DicomTag(element.tag.group, element.tag.element),
             str(element.VR),
             str(element.VM),
             parse_element_value(element.value, element.VR),
-            element.keyword,
+            keyword,
         )
 
     @property
@@ -944,7 +950,8 @@ def parse_keys(string):
     def cast_key(value):
         if value.isdigit():
             return int(value) - 1
-        elif value.isalnum():
+        # elif value.isalnum():
+        elif re.match(r"^[\w\[\]]+$", value):
             return value
         else:
             raise ValueError(f"Invalid field value: {value}")

@@ -18,6 +18,7 @@ def test_parse_keys():
     """test _parse_field"""
     assert dicomstack.parse_keys("Field") == ["Field"]
     assert dicomstack.parse_keys("Field_1") == ["Field", 0]
+    assert dicomstack.parse_keys("[Field]") == ["[Field]"]
     assert dicomstack.parse_keys("Field.1.Subfield") == ["Field", 0, "Subfield"]
 
     with pytest.raises(ValueError):
