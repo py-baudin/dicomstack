@@ -77,7 +77,7 @@ def make_volume(frames, rescale=True):
 if AVAILABLE:
 
     class DicomVolume(np.ndarray):
-        """simple layer over np ndarray to add attribute: volume.info"""
+        """simple layer over np ndarray to add attribute: volume.tags"""
 
         def __new__(cls, input_array, tags=None):
             """create Volume object"""
