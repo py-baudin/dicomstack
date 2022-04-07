@@ -1,1 +1,1 @@
-from .dicomstack import DicomStack, describe
+from .dicomstack import DicomStack, describe, DICOM

@@ -23,6 +23,7 @@ LOGGER = logging.getLogger(__name__)
 InvalidDicomError = pydicom.errors.InvalidDicomError
 
 
+
 class DuplicatedFramesError(Exception):
     """raise when duplicated frames are found"""
 
@@ -758,6 +759,23 @@ class DicomTag:
         except (ValueError, TypeError):
             return False
         return True
+
+
+# helper for creating queries
+class DicomTagSelector:
+    def __init__(self):
+        for tag in pydicom.datadict.DicomDictionary.values():
+            setattr(self, tag[-1], Selector(tag[-1]))
+            
+    def __getitem__(self, sel):
+        if DicomTag.is_tag(sel):
+            return Selector(DicomTag(*sel))
+        return Selector(sel)
+
+    def __getattr__(self, sel):
+        return self[sel]
+
+DICOM = DicomTagSelector()
 
 
 class DicomElement:
