@@ -766,7 +766,7 @@ class DicomTagSelector:
     def __init__(self):
         for tag in pydicom.datadict.DicomDictionary.values():
             setattr(self, tag[-1], Selector(tag[-1]))
-            
+
     def __getitem__(self, sel):
         if DicomTag.is_tag(sel):
             return Selector(DicomTag(*sel))
@@ -992,30 +992,32 @@ def get_zip_path(path):
     return path[: path.find(".zip") + 4]
 
 
-def list_files(path):
+def list_files(pathes):
     """list all files in path and its sub folders"""
-    files = []
-    if "*" in str(path):
-        # glob relative paths
-        subpaths = list(pathlib.Path().glob(str(path)))
-    else:
-        path = pathlib.Path(path)
-        if not path.exists():
-            raise FileNotFoundError(path)
-        subpaths = [path]
+    if not isinstance(pathes, (list, tuple)):
+        pathes = [pathes]
 
-    for subpath in subpaths:
-        if subpath.is_file():
-            files.append(subpath)
+    files = []
+    for path in map(pathlib.Path, pathes):
+        if "*" in str(path):
+            subs = pathlib.Path().glob(str(path))
+        elif path.exists():
+            subs = [path]
         else:
-            files.extend([path for path in subpath.rglob("*") if path.is_file()])
-    if not subpaths:
-        # empty
+            raise FileNotFoundError(path)
+
+        for subpath in subs:
+            if subpath.is_file():
+                files.append(subpath)
+            else:
+                files.extend([file for file in subpath.rglob("*") if file.is_file()])
+
+    if not files: # empty
         return None, []
 
     # find root directory
-    root = os.path.commonpath(subpaths)
-    if os.path.isfile(root):
-        root = os.path.dirname(root)
+    root = pathlib.Path(os.path.commonpath(pathes))
+    if root.is_file():
+        root = root.parent
     filenames = [str(file.relative_to(root)) for file in files]
-    return root, filenames
+    return str(root), filenames
