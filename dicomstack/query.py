@@ -16,7 +16,7 @@ stack("SeriesNumber[0] == 'M'")
 ==, !=, <, <=, >, >=
 
 # methods:
-.in(), .not_in(), is_null(), contains(), startswith(), endswith(), between(), regex(),
+.is_in(), .not_in(), is_null(), contains(), startswith(), endswith(), between(), regex(),
 
 # combine/modify queries with &, |, ~
 
