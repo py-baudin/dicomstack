@@ -254,14 +254,11 @@ class DicomStack(object):
 
     def remove_duplicates(self):
         """remove duplicated frames"""
-        unique_frames = set(self.frames)
-        # unique_uids = set()
-        # uids = self.get_field_values("SOPInstanceUID")
-        # unique_frames = [
-        #     frame
-        #     for uid, frame in zip(uids, self.frames)
-        #     if not (uid in unique_uids or unique_uids.add(uid))
-        # ]
+        uids = set()
+        unique_frames = [
+            frame for frame in self.frames
+            if not (frame["SOPInstanceUID"] in uids or uids.add(frame["SOPInstanceUID"]))
+        ]
         return self.from_frames(unique_frames, root=self.root)
 
     def sort(self, *fields):
@@ -287,7 +284,8 @@ class DicomStack(object):
             return self
         # use ImagePositionPatient
         axis = self.getaxis()
-        field = f"ImagePositionPatient_{axis + 1}"
+        # field = f"ImagePositionPatient_{axis + 1}"
+        field = Selector("ImagePositionPatient")[axis]
         if len(self.unique(field)) == len(self):
             return self.sort(field)
         else:
