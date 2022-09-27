@@ -103,11 +103,15 @@ class Selector:
 class Query:
     """Store a query or a combination of queries"""
 
-    def __init__(self, expr="", data=None):
-        self.expr = expr
+    def __init__(self, expr=True, data=None):
+        self.expr = expr if isinstance(expr, str) else bool(expr)
         self.data = data if data else {}
 
     def __repr__(self):
+        if self.expr is True:
+            return "All"
+        elif self.expr is False:
+            return "None"
         expr = self.expr
         for id, data in self.data.items():
             expr = expr.replace(id + "()", data["repr"])
@@ -164,7 +168,11 @@ class Query:
             raise ValueError(f"Unknown operator: {op}")
 
     def execute(self, getter):
-        """execute query"""
+        """execute query, return boolean value"""
+        if self.expr is True: # pass all
+            return True
+        elif self.expr is False: # pass none
+            return False
 
         def get_callback(getter, data):
             def callback():
@@ -180,14 +188,28 @@ class Query:
         return self.execute(*args)
 
     def __and__(self, other: "Query") -> "Query":
+        if self.expr is True:
+            return other
+        elif other.expr is True:
+            return self
+        elif self.expr is False or other.expr is False:
+            return Query(False)
         expr = f"({self.expr}) and ({other.expr})"
         data = {**self.data, **other.data}
         return Query(expr, data)
 
     def __or__(self, other: "Query") -> "Query":
+        if self.expr is False:
+            return other
+        elif other.expr is False:
+            return self
+        elif self.expr is True or other.expr is True:
+            return Query(True)
         expr = f"({self.expr}) or ({other.expr})"
         data = {**self.data, **other.data}
         return Query(expr, data)
 
     def __invert__(self) -> "Query":
+        if isinstance(self.expr, bool):
+            return Query(not self.expr)
         return Query(f"not ({self.expr})", self.data)

@@ -81,3 +81,23 @@ def test_query_class():
     # same thing:
     sel = Selector()
     assert (sel.a.b[1] == "foo").execute(getter)
+
+    # all and none Query
+    db = {'a': 1, 'b': 2}
+    query1 = Selector("a") == 1
+    getter = rget(db)
+
+    qall = Query(True)
+    assert qall.execute(getter) is True
+    qnone = Query(False)
+    assert qnone.execute(getter) is False
+    assert (qall & qnone).execute(getter) is False
+    assert (qall | qnone).execute(getter) is True
+    assert (~qall).execute(getter) is False
+    assert (~qnone).execute(getter) is True
+    assert (~qall).execute(getter) is False
+
+    assert (query1 & qall).execute(getter) is True
+    assert (~query1 | qall).execute(getter) is True
+    assert (query1 | qnone).execute(getter) is True
+    assert (query1 & qnone).execute(getter) is False
