@@ -253,13 +253,20 @@ class DicomStack(object):
         return [tuple(frame[field] for field in _fields) for frame in frames]
 
     def remove_duplicates(self):
-        """remove duplicated frames"""
+        """remove duplicated frames (from different files)"""
         uids = set()
-        unique_frames = [
-            frame for frame in self.frames
-            if not (frame["SOPInstanceUID"] in uids or uids.add(frame["SOPInstanceUID"]))
-        ]
-        return self.from_frames(unique_frames, root=self.root)
+        files = set()
+        frames = []
+        for frame in self.frames:
+            uid = frame['SOPInstanceUID']
+            if uid in uids and not frame.dicomfile in files:
+                continue # skip
+            elif not uid in uids:
+                uids.add(uid)
+                files.add(frame.dicomfile)
+            frames.append(frame)
+            continue
+        return self.from_frames(frames, root=self.root)
 
     def sort(self, *fields):
         """reindex database using field values (skip frames with missing values)"""
