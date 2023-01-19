@@ -56,8 +56,11 @@ def make_volume(frames, rescale=True):
     spacing = first["PixelSpacing"] + (spacing3,)
 
     tags = {
+        # (0,0,0) pixel location in mm
         "origin": tuple(origin),
+        # pixel dimensions in mm
         "spacing": tuple(spacing),
+        # xyz axes orientation
         "transform": tuple(transform),
     }
 
