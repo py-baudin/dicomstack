@@ -963,6 +963,10 @@ def parse_keys(string):
     syntax: "txt" or "txt_num"
     """
     # parse key
+    if string[0] == '[':
+        # custom private field: don't do anything
+        return [string]
+
     if "_" in string:
         keys, index = string.split("_")
         index = int(index) - 1
