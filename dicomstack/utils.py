@@ -166,7 +166,11 @@ def export_file(
         for element_name in FIELDS_TYPE_2:
             tag = tame_field(element_name)
             LOGGER.debug(f"Erase type-2 field: {element_name}")
-            dataset.data_element(tag).value = ""
+            try:
+                dataset.data_element(tag).value = ""
+            except KeyError:
+                LOGGER.debug(f"Could not find field: {element_name}, skipping.")
+                pass
 
         #  callback functions to find all tags corresponding to a person name
         def person_names_callback(dataset, data_element):
