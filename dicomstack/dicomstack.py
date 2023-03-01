@@ -31,11 +31,13 @@ class DuplicatedFramesError(Exception):
 class DicomStack(object):
     """load, sort and filter DICOM images"""
 
-    def __init__(self, path=None, filenames=None, allow_duplicates=False):
+    def __init__(self, path=None, filenames=None, *, duplicates='remove'):
         """path can be:
         * a directory (or a list of),
         * a file (or a list of)
         * a zip file
+
+        duplicates: 'remove', 'error', 'ignore'
         """
 
         self.frames = []
@@ -60,7 +62,7 @@ class DicomStack(object):
 
         # load dicom files
         LOGGER.info("New DICOM stack (from %s files)" % len(filenames))
-        self._load_files(filenames, allow_duplicates)
+        self._load_files(filenames, duplicates)
 
     @classmethod
     def from_frames(cls, frames, root=None):
@@ -252,21 +254,26 @@ class DicomStack(object):
         # multiple fields
         return [tuple(frame[field] for field in _fields) for frame in frames]
 
-    def remove_duplicates(self):
-        """remove duplicated frames (from different files)"""
+
+    def remove_duplicates(self, inplace=False):
+        """remove duplicated frames (incl. from different files)"""
         uids = set()
         files = set()
         frames = []
         for frame in self.frames:
             uid = frame['SOPInstanceUID']
-            if uid in uids and not frame.dicomfile in files:
+            if uid in uids:# and not frame.dicomfile in files:
                 continue # skip
             elif not uid in uids:
                 uids.add(uid)
                 files.add(frame.dicomfile)
             frames.append(frame)
             continue
-        return self.from_frames(frames, root=self.root)
+        if inplace:
+            self.frames = frames
+            return self 
+        else:
+            return self.from_frames(frames, root=self.root)
 
     def sort(self, *fields):
         """reindex database using field values (skip frames with missing values)"""
@@ -406,7 +413,7 @@ class DicomStack(object):
         """return subset of frames based on query object"""
         return [frame for frame in self.frames if query.execute(frame.get)]
 
-    def _load_files(self, filenames, allow_duplicates):
+    def _load_files(self, filenames, duplicates):
         """load filenames"""
         for filename in filenames:
             # skip DICOMDIR
@@ -419,13 +426,18 @@ class DicomStack(object):
                 self._load_file(filename)
 
         # duplicates
-        nframes = len(set(self.frames))
-        # nframes = len(self.unique("SOPInstanceUID"))
+        unique_frames = set(self.frames)
+        nframes = len(unique_frames)
         if len(self) != nframes:
             msg = f"{len(self) - nframes} duplicate frames were found"
-            if not allow_duplicates:
+            if duplicates == 'error':
                 raise DuplicatedFramesError(msg)
-            LOGGER.warning(msg)
+            elif duplicates == 'ignore':
+                LOGGER.warning(msg + ' (ignoring)')
+            elif duplicates == 'remove':
+                LOGGER.warning(msg + ' (removing)')
+                duplicated = set()
+                self.frames = [frame for frame in self.frames if not (frame in duplicated or duplicated.add(frame))]
 
     def _load_file(self, filename):
         """load single Dicom file"""

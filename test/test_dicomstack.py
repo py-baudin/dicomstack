@@ -235,14 +235,18 @@ def test_dicomstack_single(legsfile):
     assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.tags["origin"] == origin
 
-    # check for duplicates
+    # check for duplicated frames
     with pytest.raises(dicomstack.DuplicatedFramesError):
-        stack2 = DicomStack(filenames=[path, path])
+        stack2 = DicomStack(filenames=[path, path], duplicates='error')
 
-    # test remove duplicates
+    assert len(DicomStack(filenames=[path, path], duplicates='remove')) == len(stack)
+    assert len(DicomStack(filenames=[path, path], duplicates='ignore')) == 2*len(stack)
+
+    # test remove duplicates (based on SOPInstanceUID)
     stack2 = DicomStack.from_frames(stack.frames + stack.frames)
     assert len(stack2) == 2 * len(stack)
     assert stack2.remove_duplicates()["SOPInstanceUID"] == stack["SOPInstanceUID"]
+
 
     # from files
     stack_ = DicomStack(filenames=[legsfile])
