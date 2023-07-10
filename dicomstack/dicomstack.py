@@ -261,7 +261,8 @@ class DicomStack(object):
         files = set()
         frames = []
         for frame in self.frames:
-            uid = frame['SOPInstanceUID']
+            # use both uid and position for uniqueness
+            uid = frame['SOPInstanceUID'], frame['ImagePositionPatient']
             if uid in uids:# and not frame.dicomfile in files:
                 continue # skip
             elif not uid in uids:
