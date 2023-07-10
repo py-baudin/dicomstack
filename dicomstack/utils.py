@@ -60,6 +60,7 @@ FIELDS_TYPE_3 = [
 class MappingTableError(Exception):
     pass
 
+
 # uid generator
 generate_uid = pydicom.uid.generate_uid
 

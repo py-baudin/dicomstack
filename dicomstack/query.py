@@ -169,9 +169,9 @@ class Query:
 
     def execute(self, getter):
         """execute query, return boolean value"""
-        if self.expr is True: # pass all
+        if self.expr is True:  # pass all
             return True
-        elif self.expr is False: # pass none
+        elif self.expr is False:  # pass none
             return False
 
         def get_callback(getter, data):

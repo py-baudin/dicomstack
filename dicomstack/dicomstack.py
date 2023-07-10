@@ -23,7 +23,6 @@ LOGGER = logging.getLogger(__name__)
 InvalidDicomError = pydicom.errors.InvalidDicomError
 
 
-
 class DuplicatedFramesError(Exception):
     """raise when duplicated frames are found"""
 
@@ -31,7 +30,7 @@ class DuplicatedFramesError(Exception):
 class DicomStack(object):
     """load, sort and filter DICOM images"""
 
-    def __init__(self, path=None, filenames=None, *, duplicates='remove'):
+    def __init__(self, path=None, filenames=None, *, duplicates="remove"):
         """path can be:
         * a directory (or a list of),
         * a file (or a list of)
@@ -254,7 +253,6 @@ class DicomStack(object):
         # multiple fields
         return [tuple(frame[field] for field in _fields) for frame in frames]
 
-
     def remove_duplicates(self, inplace=False):
         """remove duplicated frames (incl. from different files)"""
         uids = set()
@@ -262,9 +260,9 @@ class DicomStack(object):
         frames = []
         for frame in self.frames:
             # use both uid and position for uniqueness
-            uid = frame['SOPInstanceUID'], frame['ImagePositionPatient']
-            if uid in uids:# and not frame.dicomfile in files:
-                continue # skip
+            uid = frame["SOPInstanceUID"], frame["ImagePositionPatient"]
+            if uid in uids:  # and not frame.dicomfile in files:
+                continue  # skip
             elif not uid in uids:
                 uids.add(uid)
                 files.add(frame.dicomfile)
@@ -272,7 +270,7 @@ class DicomStack(object):
             continue
         if inplace:
             self.frames = frames
-            return self 
+            return self
         else:
             return self.from_frames(frames, root=self.root)
 
@@ -431,14 +429,18 @@ class DicomStack(object):
         nframes = len(unique_frames)
         if len(self) != nframes:
             msg = f"{len(self) - nframes} duplicate frames were found"
-            if duplicates == 'error':
+            if duplicates == "error":
                 raise DuplicatedFramesError(msg)
-            elif duplicates == 'ignore':
-                LOGGER.warning(msg + ' (ignoring)')
-            elif duplicates == 'remove':
-                LOGGER.warning(msg + ' (removing)')
+            elif duplicates == "ignore":
+                LOGGER.warning(msg + " (ignoring)")
+            elif duplicates == "remove":
+                LOGGER.warning(msg + " (removing)")
                 duplicated = set()
-                self.frames = [frame for frame in self.frames if not (frame in duplicated or duplicated.add(frame))]
+                self.frames = [
+                    frame
+                    for frame in self.frames
+                    if not (frame in duplicated or duplicated.add(frame))
+                ]
 
     def _load_file(self, filename):
         """load single Dicom file"""
@@ -793,6 +795,7 @@ class DicomTagSelector:
     def __getattr__(self, sel):
         return self[sel]
 
+
 DICOM = DicomTagSelector()
 
 
@@ -976,7 +979,7 @@ def parse_keys(string):
     syntax: "txt" or "txt_num"
     """
     # parse key
-    if string[0] == '[':
+    if string[0] == "[":
         # custom private field: don't do anything
         return [string]
 
@@ -1034,7 +1037,7 @@ def list_files(pathes):
             else:
                 files.extend([file for file in subpath.rglob("*") if file.is_file()])
 
-    if not files: # empty
+    if not files:  # empty
         return None, []
 
     # find root directory

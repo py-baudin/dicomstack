@@ -83,7 +83,7 @@ def test_query_class():
     assert (sel.a.b[1] == "foo").execute(getter)
 
     # all and none Query
-    db = {'a': 1, 'b': 2}
+    db = {"a": 1, "b": 2}
     query1 = Selector("a") == 1
     getter = rget(db)
 
