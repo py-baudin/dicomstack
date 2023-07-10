@@ -60,6 +60,9 @@ FIELDS_TYPE_3 = [
 class MappingTableError(Exception):
     pass
 
+# uid generator
+generate_uid = pydicom.uid.generate_uid
+
 
 def tame_field(name):
     """tame DICOM field"""
@@ -294,10 +297,10 @@ def make_dataset(data, dtype="uint16", **tags):
     default("StudyDate", now.strftime("%Y%m%d"))
     default("StudyTime", now.strftime("%H%M%S.%f"))
     default("StudyID", "")
-    default("StudyInstanceUID", str(uuid.uuid4()))
+    default("StudyInstanceUID", generate_uid())
     # series
     default("SeriesNumber", 1)
-    default("SeriesInstanceUID", str(uuid.uuid4()))
+    default("SeriesInstanceUID", generate_uid())
     default("AccessionNumber", "")
     default("InstanceNumber", 1)
 
