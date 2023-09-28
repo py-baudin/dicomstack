@@ -478,6 +478,9 @@ class DicomStack(object):
                 if zfile.filename.endswith("/"):
                     # is a directory: skip
                     continue
+                elif 'DICOMDIR' in zfile.filename:
+                    # skip DICOMDIR for now
+                    continue
                 zfilename = os.path.normpath(zfile.filename)
                 full_zfilename = os.path.join(zip_path, zfilename)
                 if not filename in full_zfilename:
