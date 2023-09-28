@@ -196,6 +196,9 @@ class DicomStack(object):
     def single(self, *fields, default=..., precision=None):
         """return single value for field"""
         values = self.get_field_values(*fields, ignore_missing=True)
+        if not values and default is not ...:
+            return default
+        
         if precision is not None:
             try:
                 if isinstance(values[0], tuple):
@@ -213,8 +216,6 @@ class DicomStack(object):
 
         if len(values) > 1:
             raise ValueError("Multiple values found for %s" % fields)
-        elif not values and default is not ...:
-            return default
         elif not values:
             raise ValueError("No value found for %s" % fields)
         return values.pop()
