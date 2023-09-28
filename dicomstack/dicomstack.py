@@ -121,15 +121,15 @@ class DicomStack(object):
                 filename = os.path.relpath(filename, self.root)
             return {
                 # UID and number
-                "StudyInstanceUID": frame["StudyInstanceUID"],
-                "SeriesInstanceUID": frame["SeriesInstanceUID"],
-                "StudyID": frame.get("StudyID"),
-                "SeriesNumber": frame["SeriesNumber"],
+                "StudyInstanceUID": frame.get("StudyInstanceUID", 'UNKNOWN'),
+                "SeriesInstanceUID": frame.get("SeriesInstanceUID", 'UNKNOWN'),
+                "StudyID": frame.get("StudyID", -1),
+                "SeriesNumber": frame.get("SeriesNumber", -1),
                 # dates and time
-                "StudyDate": frame["StudyDate"],
-                "StudyTime": frame["StudyTime"],
+                "StudyDate": frame.get("StudyDate"),
+                "StudyTime": frame.get("StudyTime"),
                 # patient
-                "PatientID": frame["PatientID"],
+                "PatientID": frame.get("PatientID"),
                 # description
                 "StudyDescription": frame.get("StudyDescription"),
                 "SeriesDescription": frame.get("SeriesDescription"),
