@@ -119,8 +119,8 @@ class DicomStack(object):
                 filename = os.path.relpath(filename, self.root)
             return {
                 # UID and number
-                "StudyInstanceUID": frame.get("StudyInstanceUID", 'UNKNOWN'),
-                "SeriesInstanceUID": frame.get("SeriesInstanceUID", 'UNKNOWN'),
+                "StudyInstanceUID": frame.get("StudyInstanceUID", "UNKNOWN"),
+                "SeriesInstanceUID": frame.get("SeriesInstanceUID", "UNKNOWN"),
                 "StudyID": frame.get("StudyID", -1),
                 "SeriesNumber": frame.get("SeriesNumber", -1),
                 # dates and time
@@ -196,7 +196,7 @@ class DicomStack(object):
         values = self.get_field_values(*fields, ignore_missing=True)
         if not values and default is not ...:
             return default
-        
+
         if precision is not None:
             try:
                 if isinstance(values[0], tuple):
@@ -477,7 +477,7 @@ class DicomStack(object):
                 if zfile.filename.endswith("/"):
                     # is a directory: skip
                     continue
-                elif 'DICOMDIR' in zfile.filename:
+                elif "DICOMDIR" in zfile.filename:
                     # skip DICOMDIR for now
                     continue
                 zfilename = os.path.normpath(zfile.filename)
@@ -881,7 +881,7 @@ class DicomElement:
 def parse_dataset(dataset, index=None, flatten=False):
     """parse dataset to retrieve elements"""
     elements = []
-    for element in itertools.chain(getattr(dataset, 'file_meta', []), dataset):
+    for element in itertools.chain(getattr(dataset, "file_meta", []), dataset):
 
         if element.keyword == "PixelData":
             # skip pixel data
