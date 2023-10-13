@@ -54,8 +54,9 @@ Make sub-stacks by filtering out frames:
 ```python
 
     # filter by keywords
-    stack(StudyNumber=1, SeriesNumber=401)
-    > DICOMStack(50) # 50 images in stack
+    substack = stack(StudyNumber=1, SeriesNumber=401)
+    len(substack)
+    > 50 # 50 frames in substack
 
     # filter by queries with the `DICOM`` object
     substack = stack(DICOM.EchoTime > 0)
