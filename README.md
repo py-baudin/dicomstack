@@ -1,6 +1,6 @@
 # dicomstack
 
-A `pydicom` wrapper for simple loading and handling of DICOM stacks.
+A `pydicom` wrapper for simple loading and handling DICOM stacks.
 
 Loading data:
 
