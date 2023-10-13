@@ -4,10 +4,8 @@
 import os
 import pathlib
 import re
-import math
-import glob
 import datetime
-import functools
+import itertools
 from io import BytesIO, StringIO
 from collections import OrderedDict
 import zipfile
@@ -883,7 +881,7 @@ class DicomElement:
 def parse_dataset(dataset, index=None, flatten=False):
     """parse dataset to retrieve elements"""
     elements = []
-    for element in dataset:
+    for element in itertools.chain(getattr(dataset, 'file_meta', []), dataset):
 
         if element.keyword == "PixelData":
             # skip pixel data
