@@ -82,12 +82,9 @@ Make ndarray:
     volume.tags
     > {'origin': (-125.000992, -122.842384, 32.496708),
        'spacing': (0.488281, 0.488281, 1),
-       'transform': (
-            (1, -5e-06, 0), 
-            (5e-06, 0.959915, -0.280292), 
-            (1.40146e-06, 0.280292, 0.959915000025)),
-    }
-
+       'transform': ((1, 0, 0), (0, 0.959915, -0.280292), (0, 0.280292, 0.959915)),
+      }
+      
     # get series of volumes split by DICOM fields
     series, volumes = stack.as_volume(by="SeriesNumber")
     echo_times, volumes = stack.as_volume(by="EchoTime")
