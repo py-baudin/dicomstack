@@ -9,5 +9,5 @@ setup(
     packages=find_packages(),
     install_requires=["pydicom>=2.0"],
     entry_points={"console_scripts": ["dicom = dicomstack.cli:cli"]},
-    description="Convenient wrapper on pydicom for easy searching DICOM files",
+    description="A pydicom wrapper for simple loading and handling of DICOM stacks ",
 )
