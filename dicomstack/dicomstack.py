@@ -10,7 +10,9 @@ from io import BytesIO, StringIO
 from collections import OrderedDict
 import zipfile
 import logging
+import warnings
 import pydicom
+from pydicom import config
 
 from . import pixeldata
 from .query import Selector, Query
@@ -607,9 +609,18 @@ class DicomFile:
     def _load_dataset(self, load_pixels=False):
         """parse DICOM object stored in bytes"""
         logging.debug(f"DicomFile {self.filename}: load dataset")
-        dataset = pydicom.dcmread(
-            BytesIO(self.bytes), stop_before_pixels=not load_pixels
-        )
+
+        with config.strict_reading():
+            try:
+                dataset = pydicom.dcmread(
+                    BytesIO(self.bytes), stop_before_pixels=not load_pixels
+                )
+            except EOFError as exc:
+                warnings.warn(str(exc))
+                delimiter = b'\xfe\xff\xdd\xe0' # sequence delimiter
+                dataset = pydicom.dcmread(
+                    BytesIO(self.bytes + delimiter), stop_before_pixels=not load_pixels
+                )
         self._dataset = dataset
 
 
