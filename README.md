@@ -1,6 +1,6 @@
 # dicomstack
 
-A `pydicom` wrapper for simple loading and handling of DICOM stacks.
+A `pydicom` wrapper for simple loading and filtering of DICOM stacks, and making 3d volumes.
 
 Loading data:
 
@@ -8,8 +8,7 @@ Loading data:
     from dicomstack import DicomStack, DICOM
 
     # load a single DICOM file, a full directory or a zipfile
-    DATADIR = "path/to/DICOM/data"
-    stack = DicomStack(DATADIR)
+    stack = DicomStack("path/to/DICOM/data")
 
     len(stack)
     > 200 # 200 frames in stack
@@ -22,7 +21,7 @@ Loading data:
 Access field values (using simplified field names, private field names or hex tags):
 
 ```python
-    # field values for each image in stack
+    # field values for each frame in stack
     echo_times = stack["EchoTime"]
     > [10.0, 10.0, 20.0, ...]
 
@@ -53,12 +52,12 @@ Make sub-stacks by filtering out frames:
 
 ```python
 
-    # filter by keywords
+    # filter with keywords
     substack = stack(StudyNumber=1, SeriesNumber=401)
     len(substack)
     > 50 # 50 frames in substack
 
-    # filter by queries with the `DICOM`` object
+    # filter with queries using the `DICOM` object
     substack = stack(DICOM.EchoTime > 0)
     substack = stack(DICOM["[Bmatrix]"] == bmatrix)
     substack = stack(DICOM.SeriesNumber.isin([5, 6]))
