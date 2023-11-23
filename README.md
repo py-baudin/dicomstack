@@ -59,7 +59,8 @@ Make sub-stacks by filtering out frames:
 
     # filter with queries using the `DICOM` object
     substack = stack(DICOM.EchoTime > 0)
-    substack = stack(DICOM["[Bmatrix]"] == bmatrix)
+    substack = stack(DICOM.ImageType[1] == 'PRIMARY')
+    substack = stack(DICOM["[Bmatrix]"] == bmatrix) # private field 
     substack = stack(DICOM.SeriesNumber.isin([5, 6]))
     substack = stack(DICOM.SeriesDescription.startswith("prefix_"))
     # chain queries
