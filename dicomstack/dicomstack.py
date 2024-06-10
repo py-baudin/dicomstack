@@ -254,21 +254,28 @@ class DicomStack(object):
         # multiple fields
         return [tuple(frame[field] for field in _fields) for frame in frames]
 
-    def remove_duplicates(self, inplace=False):
-        """remove duplicated frames (incl. from different files)"""
-        uids = set()
+    def remove_duplicates(self, *, keys=['SOPInstanceUID', 'ImagePositionPatient'], inplace=False, warn=False):
+        """remove duplicated frames (incl. from different files)
+
+            default keys: use both uid and position for uniqueness
+        """
+        indices = set()
         files = set()
         frames = []
         for frame in self.frames:
-            # use both uid and position for uniqueness
-            uid = frame["SOPInstanceUID"], frame["ImagePositionPatient"]
-            if uid in uids:  # and not frame.dicomfile in files:
+            index = tuple(frame[key] for key in keys)
+            if index in indices:  # and not frame.dicomfile in files:
                 continue  # skip
-            elif not uid in uids:
-                uids.add(uid)
+            elif not index in indices:
+                indices.add(index)
                 files.add(frame.dicomfile)
             frames.append(frame)
             continue
+
+        diff = len(self) - len(frames)
+        if warn and diff > 0:
+            warnings.warn(f'Removed {diff} duplicated frames.')
+
         if inplace:
             self.frames = frames
             return self
@@ -312,7 +319,7 @@ class DicomStack(object):
         if how == "all":
             func = all
         else:
-            fun == any
+            func = any
         try:
             return func(frame.get(field) is not None for frame in self.frames)
         except KeyError:
@@ -327,10 +334,11 @@ class DicomStack(object):
             return None
 
         # else continue
-        stack = self.remove_duplicates()
+        # stack = self.remove_duplicates()
 
         if not by:
             # single volume
+            stack = self.remove_duplicates(keys=['ImagePositionPatient'], warn=True)
 
             if reorder:
                 # sort by location
@@ -343,7 +351,7 @@ class DicomStack(object):
         # unique values
         if isinstance(by, str):
             by = [by]
-        indices = sorted(set(stack.get_field_values(*by, ignore_missing=True)))
+        indices = sorted(set(self.get_field_values(*by, ignore_missing=True)))
 
         # index values for each volume
         if not indices:
@@ -360,7 +368,9 @@ class DicomStack(object):
         # create volumes
         volumes = []
         for filter in filters:
-            substack = stack.filter_by_field(**filter)
+            # substack = stack.filter_by_field(**filter)
+            substack = self.filter_by_field(**filter)
+            substack = substack.remove_duplicates(keys=['ImagePositionPatient'], warn=True)
 
             if reorder:
                 # sort by location
@@ -554,7 +564,8 @@ class DicomFile:
         self.filename = filename
 
     def __hash__(self):
-        return hash(self.bytes[:1000])
+        # return hash(self.bytes[:1000])
+        return hash(self.bytes)
 
     # pickle
     def __getstate__(self):
