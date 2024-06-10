@@ -1,4 +1,5 @@
 """ test DICOM utils """
+
 # coding=utf-8
 
 import os

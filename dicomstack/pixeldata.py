@@ -1,4 +1,5 @@
 """ Pixel data manipulation """
+
 # coding=utf-8
 import math
 
@@ -41,7 +42,7 @@ def make_volume(frames, rescale=True):
     ax1 = tuple(first["ImageOrientationPatient"][:3])
     ax2 = tuple(first["ImageOrientationPatient"][3:])
     vec3 = [b - a for a, b in zip(origin, end)]
-    norm3 = math.sqrt(sum(value ** 2 for value in vec3))
+    norm3 = math.sqrt(sum(value**2 for value in vec3))
     if nframe == 1:
         ax3 = (
             ax1[1] * ax2[2] - ax1[2] * ax2[1],

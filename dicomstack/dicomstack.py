@@ -1,4 +1,5 @@
 """ pydicom wrapper class for easy manipulation of DICOM data """
+
 # coding=utf-8
 
 import os
@@ -254,10 +255,16 @@ class DicomStack(object):
         # multiple fields
         return [tuple(frame[field] for field in _fields) for frame in frames]
 
-    def remove_duplicates(self, *, keys=['SOPInstanceUID', 'ImagePositionPatient'], inplace=False, warn=False):
+    def remove_duplicates(
+        self,
+        *,
+        keys=["SOPInstanceUID", "ImagePositionPatient"],
+        inplace=False,
+        warn=False,
+    ):
         """remove duplicated frames (incl. from different files)
 
-            default keys: use both uid and position for uniqueness
+        default keys: use both uid and position for uniqueness
         """
         indices = set()
         files = set()
@@ -274,7 +281,7 @@ class DicomStack(object):
 
         diff = len(self) - len(frames)
         if warn and diff > 0:
-            warnings.warn(f'Removed {diff} duplicated frames.')
+            warnings.warn(f"Removed {diff} duplicated frames.")
 
         if inplace:
             self.frames = frames
@@ -338,7 +345,7 @@ class DicomStack(object):
 
         if not by:
             # single volume
-            stack = self.remove_duplicates(keys=['ImagePositionPatient'], warn=True)
+            stack = self.remove_duplicates(keys=["ImagePositionPatient"], warn=True)
 
             if reorder:
                 # sort by location
@@ -370,7 +377,9 @@ class DicomStack(object):
         for filter in filters:
             # substack = stack.filter_by_field(**filter)
             substack = self.filter_by_field(**filter)
-            substack = substack.remove_duplicates(keys=['ImagePositionPatient'], warn=True)
+            substack = substack.remove_duplicates(
+                keys=["ImagePositionPatient"], warn=True
+            )
 
             if reorder:
                 # sort by location
@@ -628,7 +637,7 @@ class DicomFile:
                 )
             except EOFError as exc:
                 warnings.warn(str(exc))
-                delimiter = b'\xfe\xff\xdd\xe0' # sequence delimiter
+                delimiter = b"\xfe\xff\xdd\xe0"  # sequence delimiter
                 dataset = pydicom.dcmread(
                     BytesIO(self.bytes + delimiter), stop_before_pixels=not load_pixels
                 )

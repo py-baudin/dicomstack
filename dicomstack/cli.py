@@ -1,4 +1,5 @@
 """ DICOM utils cli """
+
 # coding=utf-8
 import os
 import csv
