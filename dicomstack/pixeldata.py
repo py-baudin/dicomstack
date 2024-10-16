@@ -69,7 +69,7 @@ def make_volume(frames, rescale=True):
     slices = []
     for frame in frames:
         slope, intercept = 1, 0
-        pixels = frame.pixels
+        pixels = 1.0 * frame.pixels
         if rescale:
             slope = frame.get("RescaleSlope", default=1)
             intercept = frame.get("RescaleIntercept", default=0)
