@@ -227,14 +227,14 @@ def test_dicomstack_single(legsfile):
     volume = stack.as_volume()
     assert volume.ndim == 3
     assert volume.size > 1
-    assert "origin" in volume.tags
-    assert "spacing" in volume.tags
-    assert "transform" in volume.tags
+    assert volume.origin
+    assert volume.spacing
+    assert volume.transform
     spacing = stack.frames[0]["PixelSpacing"]
     origin = tuple(stack.frames[0]["ImagePositionPatient"])
-    assert volume.tags["spacing"] == tuple(spacing + (1,))
-    assert volume.tags["transform"] == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
-    assert volume.tags["origin"] == origin
+    assert volume.spacing == tuple(spacing + (1,))
+    assert volume.transform == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+    assert volume.origin == origin
 
     # check for duplicated frames
     with pytest.raises(dicomstack.DuplicatedFramesError):

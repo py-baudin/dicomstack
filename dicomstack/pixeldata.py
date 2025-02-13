@@ -83,6 +83,18 @@ if AVAILABLE:
     class DicomVolume(np.ndarray):
         """simple layer over np ndarray to add attribute: volume.tags"""
 
+        @property
+        def origin(self):
+            return self.tags['origin']
+        
+        @property
+        def spacing(self):
+            return self.tags['spacing']
+        
+        @property
+        def transform(self):
+            return self.tags['transform']
+
         def __new__(cls, input_array, tags=None):
             """create Volume object"""
             # copy the data
@@ -98,10 +110,6 @@ if AVAILABLE:
         def __reduce__(self):
             """prevent pickling"""
             raise NotImplementedError("Cannot pickle DicomVolume object")
-
-        def __array_wrap__(self, out_arr, context=None):
-            """propagate metadata if wrap is called"""
-            return super().__array_wrap__(self, out_arr, context)
 
         def __array_wrap__(self, out_arr, context=None):
             if self.shape != out_arr.shape:
