@@ -236,6 +236,10 @@ def test_dicomstack_single(legsfile):
     assert volume.transform == ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     assert volume.origin == origin
 
+    proj = volume.sum(axis=0)
+    assert isinstance(proj, np.ndarray)
+    assert not hasattr(proj, 'spacing') # proj is a simple ndarray
+
     # check for duplicated frames
     with pytest.raises(dicomstack.DuplicatedFramesError):
         stack2 = DicomStack(filenames=[path, path], duplicates="error")
