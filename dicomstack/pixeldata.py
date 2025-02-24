@@ -116,7 +116,7 @@ if AVAILABLE:
                 # if not same shape: drop metadata
                 return out_arr
             # else wrap out_array
-            return super().__array_wrap__(self, out_arr, context, return_scalar)
+            return super().__array_wrap__(out_arr, context, return_scalar)
 
 
 @available
