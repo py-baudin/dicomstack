@@ -111,12 +111,12 @@ if AVAILABLE:
             """prevent pickling"""
             raise NotImplementedError("Cannot pickle DicomVolume object")
 
-        def __array_wrap__(self, out_arr, context=None):
+        def __array_wrap__(self, out_arr, context=None, return_scalar=False):
             if self.shape != out_arr.shape:
                 # if not same shape: drop metadata
                 return out_arr
             # else wrap out_array
-            return np.ndarray.__array_wrap__(self, out_arr, context)
+            return np.ndarray.__array_wrap__(self, out_arr, context=context, return_scalar=return_scalar)
 
 
 @available
@@ -146,7 +146,7 @@ def format_pixels(data, dtype="uint8"):
     data_max = data.max()
     data_min = data.min()
     reftype = np.dtype(dtype)
-    if not np.issubsctype(data, np.integer) or data.itemsize > reftype.itemsize:
+    if not np.issubdtype(data.dtype, np.integer) or data.itemsize > reftype.itemsize:
 
         max_val = np.iinfo(reftype).max
         min_val = np.iinfo(reftype).min
@@ -159,9 +159,9 @@ def format_pixels(data, dtype="uint8"):
         data = ((data - intercept) / slope).astype(reftype)
 
     # data type
-    if np.issubsctype(data, np.signedinteger):
+    if np.issubdtype(data.dtype, np.signedinteger):
         tags["PixelRepresentation"] = 1
-    elif np.issubsctype(data, np.unsignedinteger):
+    elif np.issubdtype(data.dtype, np.unsignedinteger):
         tags["PixelRepresentation"] = 0
     else:
         raise ValueError("Invalid data type: %s", data.dtype)
