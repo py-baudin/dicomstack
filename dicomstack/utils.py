@@ -212,17 +212,14 @@ def write_dataset(
     dataset=None,  # reference dataset
     **kwargs,
 ):
+    """ write valid DICOM file """
     if dataset is not None:
         dataset = update_dataset(dataset, data=data, **kwargs)
     else:
         # create
         dataset = make_dataset(data, **kwargs)
 
-    """ write valid DICOM file """
-
     # Create the FileDataset instance
-    # (initially no data elements, but file_meta
-    # supplied)
     LOGGER.debug("Setting file meta information.")
     file_meta = pydicom.dataset.FileMetaDataset()
     # Populate required values for file meta information
@@ -234,6 +231,7 @@ def write_dataset(
         raise ValueError("Unknown media storage class UID: %s" % media_storage_class)
     file_meta.MediaStorageSOPInstanceUID = "1.2.3"
     file_meta.ImplementationClassUID = "1.2.3.4"
+    file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
 
     dataset = pydicom.FileDataset(
         filename, dataset, file_meta=file_meta, preamble=b"\0" * 128
@@ -245,7 +243,8 @@ def write_dataset(
         LOGGER.debug("Setting file extension to: %s", ext)
         basename = os.path.splitext(filename)[0]
         filename = basename + ext
-    dataset.save_as(filename, write_like_original=False)
+    # dataset.save_as(filename, write_like_original=False)
+    dataset.save_as(filename, enforce_file_format=False)
 
 
 def update_dataset(dataset, data=None, dtype="uint16", **tags):
@@ -259,6 +258,7 @@ def update_dataset(dataset, data=None, dtype="uint16", **tags):
 
 def make_dataset(data, dtype="uint16", **tags):
     """make valid DICOM dataset"""
+    # dataset = pydicom.Dataset()
     dataset = pydicom.Dataset()
 
     # date time
@@ -339,9 +339,8 @@ def make_dataset(data, dtype="uint16", **tags):
             element = pydicom.DataElement(tag, vr, value)
         dataset.add(element)
 
-    # Set the transfer syntax
-    dataset.is_little_endian = True
-    dataset.is_implicit_VR = True
+    # # Set the transfer syntax
+    # dataset.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
 
     # Set creation date/time
     dataset.ContentDate = now.strftime("%Y%m%d")
