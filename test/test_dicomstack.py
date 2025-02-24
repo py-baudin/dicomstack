@@ -334,8 +334,8 @@ def test_dicomstack_multi(multi):
     spacing = stack.frames[0]["PixelSpacing"]
     slice_spacing = stack.frames[0]["SpacingBetweenSlices"]
     origin = tuple(stack.frames[0]["ImagePositionPatient"])
-    assert np.all(np.isclose(volume.tags["spacing"], spacing + (slice_spacing,)))
-    assert volume.tags["origin"] == origin
+    assert np.all(np.isclose(volume.spacing, spacing + (slice_spacing,)))
+    assert volume.origin == origin
 
     # queries
     filtered = stack(stack.EchoTime == echo_times[0])
