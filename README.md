@@ -75,15 +75,13 @@ Make ndarray:
     # make pixel volume (requires numpy)
     volume = stack(SeriesNumber=401).as_volume()
 
-    # volume's type is a subclass of ndarray with added metadata
-    volume.shape
-    > (220, 440, 64)
-    
-    volume.tags
-    > {'origin': (-125.000992, -122.842384, 32.496708),
-       'spacing': (0.488281, 0.488281, 1),
-       'transform': ((1, 0, 0), (0, 0.959915, -0.280292), (0, 0.280292, 0.959915)),
-      }
+    # volume's type is a subclass of 3d ndarray with added metadata
+    volume.origin
+    > (-125.000992, -122.842384, 32.496708)
+    volume.spacing
+    > (0.488281, 0.488281, 1)
+    volume.transform
+    > ((1, 0, 0), (0, 0.959915, -0.280292), (0, 0.280292, 0.959915))
       
     # get series of volumes split by DICOM fields
     series, volumes = stack.as_volume(by="SeriesNumber")
