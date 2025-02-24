@@ -56,7 +56,7 @@ def make_volume(frames, rescale=True):
     transform = (ax1, ax2, ax3)
     spacing = first["PixelSpacing"] + (spacing3,)
 
-    tags = {
+    metadata = {
         # (0,0,0) pixel location in mm
         "origin": tuple(origin),
         # pixel dimensions in mm
@@ -75,37 +75,44 @@ def make_volume(frames, rescale=True):
             intercept = frame.get("RescaleIntercept", default=0)
             pixels = pixels * slope + intercept
         slices.append(pixels)
-    return DicomVolume(slices, tags).T
+    return DicomVolume(slices, **metadata).T
 
 
 if AVAILABLE:
 
     class DicomVolume(np.ndarray):
-        """simple layer over np ndarray to add attribute: volume.tags"""
+        """simple layer over np ndarray to add metadata"""
 
         @property
         def origin(self):
-            return self.tags['origin']
+            return self.metadata['origin']
         
         @property
         def spacing(self):
-            return self.tags['spacing']
+            return self.metadata['spacing']
         
         @property
         def transform(self):
-            return self.tags['transform']
+            return self.metadata['transform']
+        
+        @property
+        def tags(self):
+            return self.metadata
 
-        def __new__(cls, input_array, tags=None):
+        def __new__(cls, input_array, **metadata):
             """create Volume object"""
             # copy the data
             obj = np.asarray(input_array).view(cls)
-            obj.tags = tags
+            if 'tags' in metadata:
+                # deprecated keyword `tags`
+                metadata.update(metadata.pop('tags'))
+            obj.metadata = dict(metadata)
             return obj
 
         def __array_finalize__(self, obj):
             if obj is None:
                 return
-            self.tags = getattr(obj, "tags", {})
+            self.metadata = dict(getattr(obj, "metadata", {}))
 
         def __reduce__(self):
             """prevent pickling"""
@@ -121,7 +128,7 @@ if AVAILABLE:
 
 @available
 def format_pixels(data, dtype="uint8"):
-    """make tags from ndarray"""
+    """make metadata from ndarray"""
     tags = {}
     data = np.asarray(data)
 
