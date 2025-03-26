@@ -176,6 +176,11 @@ def cli_export(subparser):
         help="Dot not remove personal data.",
     )
     parser_export.add_argument(
+        "--subset",
+        default=None,
+        help="File pattern to filter exported files or folders.",
+    )
+    parser_export.add_argument(
         "--remove-private",
         default=False,
         action="store_true",
@@ -203,6 +208,7 @@ def cli_export(subparser):
         mapkey = args.map_key
         anonymize = not args.dont_anonymize
         remove_private = args.remove_private
+        subset = args.subset
 
         if maptable:
             if maptable.endswith(".csv"):
@@ -223,6 +229,13 @@ def cli_export(subparser):
                 print(f"Unknown table format: {maptable}")
                 exit()
 
+        if subset:
+            if os.path.isfile(subset):
+                with open(subset, 'r') as fp:
+                    subset = fp.read().splitlines() 
+        else:
+            subset = [subset]
+
         logging.basicConfig(level=logging.INFO)
         opts = dict(
             overwrite=overwrite,
@@ -230,11 +243,12 @@ def cli_export(subparser):
             mapkey=mapkey,
             anonymize=anonymize,
             remove_private_tags=remove_private,
+            subset=subset,
         )
 
         if os.path.exists(dest):
             # destination
-            print(f"Warning destination is not emtpy: {dest}")
+            print(f"Warning destination is not empty: {dest}")
             while True:
                 ans = input("Continue anyway (y/n)?: ")
                 if ans == "y":
@@ -242,11 +256,13 @@ def cli_export(subparser):
                 elif ans == "n":
                     exit()
 
+    
         if os.path.isfile(src):
-            # source
+            # export single DICOM file
             filename = utils.export_file(src, dest, **opts)
             files = [filename]
         elif os.path.isdir(src):
+            # export directory
             files = utils.export_stack(src, dest, **opts)
         else:
             print(f"No such file/directory: {src}")

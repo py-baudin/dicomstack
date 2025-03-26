@@ -3,6 +3,7 @@
 # coding=utf-8
 import os
 import pathlib
+from itertools import chain
 import datetime
 import uuid
 import logging
@@ -75,29 +76,43 @@ def tame_field(name):
 
 
 def export_stack(src, dest, prefix=None, **kwargs):
-    """export/anonymize whole dicom stack"""
+    """export/anonymize a whole dicom stack"""
     outfile = None
-    anonymized = []
+    src = pathlib.Path(src)
     dest = pathlib.Path(dest)
+    subset = kwargs.pop('subset', None)
+    if not subset:
+        subset = ['*']
 
-    for root, dirs, files in os.walk(src):
-        root = pathlib.Path(root)
-        nfile = len(files)
-        if not any(pydicom.misc.is_dicom(root / file) for file in files):
-            continue
-        LOGGER.info(f"Converting folder: '{root.relative_to(src)}'")
-        errors = set()
-        for i, filename in enumerate(files):
+    exported = {}
+    errors = set()
+    for pattern in subset:
+        if pattern != '*':
+            LOGGER.info(f"Applying pattern: '{pattern}'")
+
+        for infile in chain(src.glob(pattern), src.glob(pattern + '/*')):
+            if not infile.is_file():
+                continue
+            elif not pydicom.misc.is_dicom(infile):
+                continue
+
+            parent = infile.parent
+            if not parent in exported:
+                LOGGER.info(f"Exporting folder: '{parent.relative_to(src)}'")
+
+            # output file
+            exported.setdefault(parent, [])
+            index = len(exported[parent])
             if prefix:
-                outfile = f"{prefix}{i+1:{nfile}}"
+                outname = f"{prefix}{index + 1}"
             else:
-                outfile = filename
+                outname = infile.name
+            outfile = dest / parent.relative_to(src) / outname
 
-            infile = root / filename
-            outfile = dest / root.relative_to(src) / outfile
-            LOGGER.debug(f"Loading file: {infile.relative_to(src)}")
+            # export
+            LOGGER.debug(f"Exporting file: {infile.relative_to(parent)}")
             try:
-                filename = export_file(infile, outfile, **kwargs)
+                outfile = export_file(infile, outfile, **kwargs)
             except (
                 FileExistsError,
                 MappingTableError,
@@ -108,8 +123,9 @@ def export_stack(src, dest, prefix=None, **kwargs):
                     LOGGER.info(exc)
                     errors.add(strexc)
                 continue
-            anonymized.append(filename)
-    return anonymized
+            exported[parent].append(outfile)
+
+    return sum(exported.values(), start=[])
 
 
 def export_file(
@@ -126,6 +142,13 @@ def export_file(
     mapper: dict of DICOM tag/values, or dict of.
     mapkey: use DICOM tag as mapping key in mapper
     """
+    # source
+    src = pathlib.Path(src)
+
+    # destination
+    dest = pathlib.Path(dest)
+    if dest.is_file() and not overwrite:
+        raise FileExistsError("Destination file already exists: '%s'" % dest)
 
     # read dicom
     dataset = pydicom.dcmread(str(src))
@@ -196,10 +219,7 @@ def export_file(
             raise MappingTableError(f"Unknown tag: {tag}")
 
     # save
-    dest = pathlib.Path(dest)
     dest.parent.mkdir(exist_ok=True, parents=True)
-    if dest.is_file() and not overwrite:
-        raise FileExistsError("Destination file already exists: '%s'" % dest)
     dataset.save_as(str(dest))
     return dest
 
