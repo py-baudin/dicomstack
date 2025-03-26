@@ -232,9 +232,9 @@ def cli_export(subparser):
         if subset:
             if os.path.isfile(subset):
                 with open(subset, 'r') as fp:
-                    subset = fp.read().splitlines() 
-        else:
-            subset = subset.split(';')
+                    subset = fp.read().splitlines()
+            else:
+                subset = subset.split(';')
 
         logging.basicConfig(level=logging.INFO)
         opts = dict(

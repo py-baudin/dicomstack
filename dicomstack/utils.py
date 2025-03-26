@@ -3,8 +3,8 @@
 # coding=utf-8
 import os
 import pathlib
+import warnings
 import datetime
-import uuid
 import logging
 import pydicom
 from . import pixeldata
@@ -96,7 +96,9 @@ def export_stack(src, dest, prefix=None, **kwargs):
         if subdir != '.':
             LOGGER.info(f"Searching subfolder: {subdir}'")
         for infile in walk(src / subdir):
-            if not infile.is_file():
+            strpath = str(infile.resolve())
+            if len(strpath) > 256 and not infile.is_file():
+                warnings.warn(f'Found filepath longer that 256 char, skipping.')
                 continue
             elif not pydicom.misc.is_dicom(infile):
                 continue
