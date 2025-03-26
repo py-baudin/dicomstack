@@ -178,7 +178,7 @@ def cli_export(subparser):
     parser_export.add_argument(
         "--subset",
         default=None,
-        help="File pattern to filter exported files or folders.",
+        help="Subdirectory(ies) to search for exported files or folders.",
     )
     parser_export.add_argument(
         "--remove-private",
@@ -234,7 +234,7 @@ def cli_export(subparser):
                 with open(subset, 'r') as fp:
                     subset = fp.read().splitlines() 
         else:
-            subset = [subset]
+            subset = subset.split(';')
 
         logging.basicConfig(level=logging.INFO)
         opts = dict(

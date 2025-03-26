@@ -3,7 +3,6 @@
 # coding=utf-8
 import os
 import pathlib
-from itertools import chain
 import datetime
 import uuid
 import logging
@@ -82,15 +81,21 @@ def export_stack(src, dest, prefix=None, **kwargs):
     dest = pathlib.Path(dest)
     subset = kwargs.pop('subset', None)
     if not subset:
-        subset = ['*']
+        subset = ['.']
+
+    def walk(path):
+        for _path in path.glob('*'):
+            if _path.is_dir():
+                yield from walk(_path)
+            else:
+                yield _path
 
     exported = {}
     errors = set()
-    for pattern in subset:
-        if pattern != '*':
-            LOGGER.info(f"Applying pattern: '{pattern}'")
-
-        for infile in chain(src.glob(pattern), src.glob(pattern + '/*')):
+    for subdir in subset:
+        if subdir != '.':
+            LOGGER.info(f"Searching subfolder: {subdir}'")
+        for infile in walk(src / subdir):
             if not infile.is_file():
                 continue
             elif not pydicom.misc.is_dicom(infile):
