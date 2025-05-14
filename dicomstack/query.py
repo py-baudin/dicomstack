@@ -52,6 +52,9 @@ class Selector:
 
     def __eq__(self, value: Any) -> "Query":
         return Query.from_selector(self, "equal", value)
+    
+    def __contains__(self, value: Any) -> "Query":
+        return Query.from_selector(self, "contains", value)
 
     def __ne__(self, value: Any) -> "Query":
         return Query.from_selector(self, "not-equal", value)
