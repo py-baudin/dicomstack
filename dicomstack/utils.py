@@ -29,13 +29,13 @@ FIELDS_TYPE_3 = [
     "Referring Physician's Address",
     "Referring Physician's Telephone Numbers",
     "Station Name",
-    # "Study Description", # keep those
-    # "Series Description", # keep those
+    "Study Description", # keep this?
+    # "Series Description", # keep this
     "Institutional Department Name",
-    # "Physician(s) of Record",
+    # "Physician(s) of Record", # removed as PN
     "Performing Physicians' Name",
-    # "Name of Physician(s) Reading study", ?
-    # "Operator's Name", ?
+    # "Name of Physician(s) Reading study", # removed as PN
+    # "Operator's Name", # removed as PN
     "Admitting Diagnoses Description",
     "Derivation Description",
     "Patient's Birth Time",
@@ -50,7 +50,7 @@ FIELDS_TYPE_3 = [
     "Additional Patient's History",
     "Patient Comments",
     "Device Serial Number",
-    # "Protocol Name",  # keep those
+    "Protocol Name",
     "Image Comments",
     "Request Attributes Sequence",
     "Storage Media File-Set UID",
