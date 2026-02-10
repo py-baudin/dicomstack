@@ -168,9 +168,12 @@ def export_file(
     else:
         # patient's id for mapping
         mapkey = tame_field(mapkey)
-        if not mapkey in dataset:
+        try:
+            dataset[mapkey]
+        except KeyError:
+            # if not mapkey in dataset:
             raise MappingTableError(f"Unkown tag: {mapkey}")
-        id = dataset.data_element(mapkey).value
+        id = str(dataset.data_element(mapkey).value)
         if not id in mapper:
             # raise
             raise MappingTableError(f"Missing index: '{id}' in mapping table.")
