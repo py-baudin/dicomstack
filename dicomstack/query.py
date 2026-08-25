@@ -102,6 +102,9 @@ class Selector:
     def regex(self, value: Any) -> "Query":
         return Query.from_selector(self, "regex", value)
 
+    def apply(self, expr: Any) -> "Query":
+        return Query.from_selector(self, "apply", expr)
+
 
 class Query:
     """Store a query or a combination of queries"""
@@ -167,6 +170,8 @@ class Query:
             return value1.endswith(value2)
         elif op == "regex":
             return re.match(value2, value1) is not None
+        elif op == "apply":
+            return value2(value1)
         else:
             raise ValueError(f"Unknown operator: {op}")
 
@@ -179,7 +184,10 @@ class Query:
 
         def get_callback(getter, data):
             def callback():
-                return self.compare(data["op"], getter(data["selector"]), data["value"])
+                try:
+                    return self.compare(data["op"], getter(data["selector"]), data["value"])
+                except TypeError:
+                    False
 
             return callback
 
