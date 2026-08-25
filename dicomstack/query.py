@@ -24,6 +24,7 @@ stack("SeriesNumber[0] == 'M'")
 
 import re
 from typing import Any
+import warnings
 
 
 class Selector:
@@ -186,8 +187,9 @@ class Query:
             def callback():
                 try:
                     return self.compare(data["op"], getter(data["selector"]), data["value"])
-                except (TypeError, AttributeError):
-                    False
+                except (TypeError, AttributeError) as exc:
+                    warnings.warn(f'`{data["op"]}->{data["selector"]}` returned error: {exc}')
+                    return False
 
             return callback
 
@@ -224,3 +226,10 @@ class Query:
         if isinstance(self.expr, bool):
             return Query(not self.expr)
         return Query(f"not ({self.expr})", self.data)
+
+
+
+def my_warning(message, category, filename, lineno, file=None, line=None):
+    print(f'WARNING: {message}')
+
+warnings.showwarning = my_warning
