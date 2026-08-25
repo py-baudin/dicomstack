@@ -186,7 +186,7 @@ class Query:
             def callback():
                 try:
                     return self.compare(data["op"], getter(data["selector"]), data["value"])
-                except TypeError:
+                except (TypeError, AttributeError):
                     False
 
             return callback
