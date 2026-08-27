@@ -188,7 +188,7 @@ class Query:
                 try:
                     return self.compare(data["op"], getter(data["selector"]), data["value"])
                 except (TypeError, AttributeError) as exc:
-                    warnings.warn(f'`{data["op"]}->{data["selector"]}` returned error: {exc}')
+                    warnings.warn(f'`{data["selector"]}{data["op"]}({data["value"]})` returned error: {exc}')
                     return False
 
             return callback
