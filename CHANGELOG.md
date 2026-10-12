@@ -52,3 +52,4 @@
 - Fixed: queries mixing equal-looking values (`1` and `"1"`) could overwrite each other.
 - Fixed: `copy`/`pickle` of selectors (special attributes became selectors).
 - Fixed: field filters raised `IndexError` on out-of-range indices (now skipped).
+- Fixed: `make_dataset` replaced given falsy values (e.g. `SeriesNumber=0`).

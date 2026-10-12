@@ -301,10 +301,9 @@ def make_dataset(data, dtype="uint16", **tags):
     now = datetime.datetime.now()
 
     def default(name, value):
-        # set default value in tags
-        if tags.get(name):
-            return
-        tags[name] = value
+        # set default value of missing tags (given values, even falsy, are kept)
+        if tags.get(name) is None:
+            tags[name] = value
 
     # set required tags
     # patient

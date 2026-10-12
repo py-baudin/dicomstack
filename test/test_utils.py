@@ -21,6 +21,15 @@ def test_make_dataset():
         utils.make_dataset(data, BadTag="Foo Bar")
 
 
+def test_make_dataset_falsy_values():
+    # given falsy values are kept, only missing ones get defaults
+    data = np.arange(3 * 4, dtype="uint8").reshape((3, 4))
+    ds = utils.make_dataset(data, SeriesNumber=0, InstanceNumber=0, StudyID="")
+    assert ds.SeriesNumber == 0
+    assert ds.InstanceNumber == 0
+    assert ds.Modality == "MR"  # default
+
+
 def test_write_dataset(tmpdir):
     """test writing dicom file"""
     filename = tmpdir.join("test.dcm")
