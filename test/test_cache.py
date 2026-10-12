@@ -14,7 +14,7 @@ from pydicom.uid import generate_uid
 import golden_lib
 from dicomstack import DicomStack, DICOM
 from dicomstack import cache
-from dicomstack import dicomstack as core
+from dicomstack import files as core
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

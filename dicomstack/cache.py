@@ -21,6 +21,8 @@ import importlib.metadata
 
 import pydicom
 
+from .elements import DicomTag, parse_element_value
+
 LOGGER = logging.getLogger(__name__)
 
 FORMAT_VERSION = 1
@@ -153,8 +155,6 @@ def file_stat(path):
 
 def frame_values(lookup, index):
     """cached values of a frame: {"v": {tag: value}, "k": {keyword: tag}}"""
-    from .dicomstack import parse_element_value  # circular import
-
     by_tag, by_keyword = lookup.frame_elements(index)
     values = {}
     for tag, element in by_tag.items():
@@ -197,6 +197,33 @@ def cached_value(element, convert):
         return NOT_CACHED
     elif not is_plain(value) and not isinstance(value, tuple):
         return NOT_CACHED
+    return value
+
+
+def get_cached_value(cached, keys):
+    """value from the cached values of a frame (frame_values), or NOT_CACHED
+
+    keys: compiled keys (elements.compile_keys)
+    raises KeyError for missing elements (the cache lists all elements)
+    """
+    key = keys[0]
+    if DicomTag.is_tag(key):
+        tag = DicomTag(*key)
+        tag_key = f"{tag.group:04x},{tag.element:04x}"
+    elif isinstance(key, str):
+        tag_key = cached["k"].get(key)
+        if tag_key is None:
+            raise KeyError(key)
+    else:
+        raise TypeError(f"Invalid key type: {key}")
+    if not tag_key in cached["v"]:
+        raise KeyError(key)
+    value = cached["v"][tag_key]
+    if value is NOT_CACHED:
+        return value
+    for key in keys[1:]:
+        # as get_subitem for non-sequence elements
+        value = value[key]
     return value
 
 

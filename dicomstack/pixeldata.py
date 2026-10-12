@@ -5,8 +5,84 @@ import os
 import sys
 import math
 import warnings
+from io import BytesIO
 
 import numpy as np
+import pydicom
+
+# pixel data read directly (other transfer syntaxes: decoded by pydicom)
+NATIVE_SYNTAXES = {pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian}
+ROWS, COLUMNS, BITS_ALLOCATED = 0x00280010, 0x00280011, 0x00280100
+
+
+def decode_pixels(header, data):
+    """pixel array of a DICOM file
+
+    header: the file's dataset without pixel data
+    data: the file's bytes from the pixel data element on
+    """
+    syntax = header.file_meta.TransferSyntaxUID
+    if syntax in NATIVE_SYNTAXES:
+        pixels = read_native_pixels(BytesIO(data), header, implicit=syntax.is_implicit_VR)
+        if pixels is not None:
+            return pixels
+    # other syntaxes: read the pixel data element only, decode with pydicom
+    elements = pydicom.filereader.read_dataset(
+        BytesIO(data), syntax.is_implicit_VR, syntax.is_little_endian
+    )
+    dataset = pydicom.Dataset()
+    dataset.update(header)
+    dataset.update(elements)
+    dataset.file_meta = header.file_meta
+    return dataset.pixel_array
+
+
+def read_native_pixels(fp, header, implicit):
+    """read native (uncompressed, little endian) pixel data at the current position of fp
+
+    returns the same array as pydicom's pixel_array, or None if not supported
+    (several samples per pixel, unusual bit depths, unexpected element)
+    """
+    rows, columns = header.get(ROWS), header.get(COLUMNS)
+    bits = header.get(BITS_ALLOCATED)
+    if rows is None or columns is None or bits is None or bits.value not in (8, 16, 32):
+        return None
+    rows, columns, bits = rows.value, columns.value, bits.value
+    samples = header.SamplesPerPixel if "SamplesPerPixel" in header else 1
+    stored = header.BitsStored if "BitsStored" in header else bits
+    high_bit = header.HighBit if "HighBit" in header else stored - 1
+    signed = header.PixelRepresentation == 1 if "PixelRepresentation" in header else False
+    nframe = int(header.NumberOfFrames or 1) if "NumberOfFrames" in header else 1
+    if samples != 1 or not stored or stored > bits or high_bit != stored - 1:
+        return None
+
+    # pixel data element: tag, (explicit VR: VR, reserved), length
+    if fp.read(4) != b"\xe0\x7f\x10\x00":
+        return None
+    if implicit:
+        length = int.from_bytes(fp.read(4), "little")
+    elif fp.read(4)[:2] in (b"OB", b"OW"):
+        length = int.from_bytes(fp.read(4), "little")
+    else:
+        return None
+    dtype = np.dtype(f"<{'i' if signed else 'u'}{bits // 8}")
+    size = rows * columns * nframe * dtype.itemsize
+    if length == 0xFFFFFFFF or length < size:
+        return None
+    buffer = bytearray(size)
+    if fp.readinto(buffer) != size:
+        return None
+    pixels = np.frombuffer(buffer, dtype=dtype)
+
+    if stored < bits:
+        # as pydicom: mask unused high bits, or extend the sign
+        if signed:
+            shift = bits - stored
+            pixels = (pixels << shift) >> shift
+        else:
+            pixels &= (1 << stored) - 1
+    shape = (nframe, rows, columns) if nframe > 1 else (rows, columns)
+    return pixels.reshape(shape)
 
 
 def make_volume(frames, rescale=True, tol=1e-3, strict=False, dtype=None):

@@ -144,7 +144,7 @@ def test_zip_opened_once(zipped, monkeypatch):
         opened.append(args[0])
         return ZipFile(*args, **kwargs)
 
-    monkeypatch.setattr(dicomstack.dicomstack.zipfile, "ZipFile", counting)
+    monkeypatch.setattr(dicomstack.files.zipfile, "ZipFile", counting)
     names = ["IM1", "IM10", "sub"]
     stack = DicomStack(filenames=[os.path.join(zipped, name) for name in names])
     assert len(stack) == 3
