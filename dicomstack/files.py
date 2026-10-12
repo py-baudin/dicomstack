@@ -4,6 +4,7 @@ import os
 import sys
 import copy
 import fnmatch
+import glob
 import pathlib
 import re
 import hashlib
@@ -656,15 +657,23 @@ def list_files(pathes, recursive=True):
         pathes = [pathes]
 
     files = []
+    bases = []  # paths found (glob patterns expanded)
     for path in map(pathlib.Path, pathes):
+        zip_path = get_zip_path(path)
         if "*" in str(path):
-            subs = pathlib.Path().glob(str(path))
+            subs = sorted(map(pathlib.Path, glob.glob(str(path))))
         elif path.exists():
             subs = [path]
+        elif zip_path and os.path.isfile(zip_path):
+            # member or folder inside a zip file: loaded as a "file", root: the zip's folder
+            bases.append(pathlib.Path(zip_path))
+            files.append(path)
+            continue
         else:
             raise FileNotFoundError(path)
 
         for subpath in subs:
+            bases.append(subpath)
             if subpath.is_file():
                 files.append(subpath)
             else:
@@ -675,7 +684,7 @@ def list_files(pathes, recursive=True):
         return None, []
 
     # find root directory
-    root = pathlib.Path(os.path.commonpath(pathes))
+    root = pathlib.Path(os.path.commonpath(bases))
     if root.is_file():
         root = root.parent
     filenames = [str(file.relative_to(root)) for file in files]

@@ -199,6 +199,29 @@ def test_include_exclude_recursive(folder):
     assert len(DicomStack(filenames=files, exclude="*.txt").non_dicom) == 0
 
 
+def test_glob_pattern(folder, monkeypatch):
+    # the root is computed from the matched paths, not from the pattern
+    monkeypatch.chdir(folder)
+    stack = DicomStack("s*")
+    assert len(stack) == 12
+    assert stack.root == "."
+    assert stack.filenames[0].replace("\\", "/") == "s1/im1_0.dcm"
+    assert len(DicomStack(str(folder / "s2" / "im1_*.dcm"))) == 3
+
+
+def test_path_inside_zip(folder, tmp_path):
+    with zipfile.ZipFile(tmp_path / "a.zip", "w") as zf:
+        for path in folder.rglob("*.dcm"):
+            zf.write(path, path.relative_to(folder).as_posix())
+    stack = DicomStack(tmp_path / "a.zip" / "s1")
+    assert len(stack) == 6
+    assert stack.root == str(tmp_path)
+    assert stack.filenames[0].replace("\\", "/").startswith("a.zip/s1/")
+    assert len(DicomStack([tmp_path / "a.zip" / "s1", tmp_path / "a.zip" / "s2"])) == 12
+    with pytest.raises(FileNotFoundError):
+        DicomStack(tmp_path / "b.zip" / "s1")
+
+
 def test_progress(folder):
     calls = []
     DicomStack(folder, progress=lambda done, total: calls.append((done, total)))
