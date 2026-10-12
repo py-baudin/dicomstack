@@ -241,6 +241,17 @@ class DicomVolume(np.ndarray):
     def has_geometry(self):
         return get_geometry(self) is not None
 
+    @property
+    def affine(self):
+        """4x4 affine transform: voxel indices (i, j, k, 1) -> LPS coordinates"""
+        if not self.has_geometry():
+            raise ValueError("Volume without geometry")
+        affine = np.eye(4)
+        for axis in range(3):
+            affine[:3, axis] = np.asarray(self.transform[axis], dtype=float) * self.spacing[axis]
+        affine[:3, 3] = self.origin
+        return affine
+
     def __getitem__(self, key):
         """geometry-aware slicing (as tomio.volume.Volume)
 

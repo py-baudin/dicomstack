@@ -2,6 +2,8 @@
 
 # coding=utf-8
 import os
+import sys
+import time
 import pathlib
 import warnings
 import datetime
@@ -58,6 +60,39 @@ FIELDS_TYPE_3 = [
 
 class MappingTableError(Exception):
     pass
+
+
+class ProgressBar:
+    """simple text progress bar: `[######------]  45/100` (on stderr by default)
+
+    interval: minimum time between two redraws (seconds); the last update is always shown
+    """
+
+    def __init__(self, total, width=30, file=None, interval=0.1):
+        self.total = total
+        self.width = width
+        self.file = file
+        self.interval = interval
+        self._shown = None
+        self._time = None
+
+    def update(self, done):
+        """show progress"""
+        filled = self.width * done // self.total if self.total else self.width
+        state = (filled, done)
+        now = time.monotonic()
+        if state == self._shown:
+            return
+        elif done < self.total and self._time is not None and now - self._time < self.interval:
+            return
+        self._shown, self._time = state, now
+        bar = "#" * filled + "-" * (self.width - filled)
+        file = self.file or sys.stderr
+        print(f"\r[{bar}] {done:>{len(str(self.total))}}/{self.total}", end="", file=file, flush=True)
+
+    def close(self):
+        if self._shown is not None:
+            print(file=self.file or sys.stderr)
 
 
 # uid generator
@@ -136,19 +171,20 @@ def export_file(
 ):
     """export/anonymize dicom file
 
+    src: path of the DICOM file, or a pydicom dataset (modified in place)
     mapper: dict of DICOM tag/values, or dict of.
     mapkey: use DICOM tag as mapping key in mapper
     """
-    # source
-    src = pathlib.Path(src)
-
     # destination
     dest = pathlib.Path(dest)
     if dest.is_file() and not overwrite:
         raise FileExistsError("Destination file already exists: '%s'" % dest)
 
     # read dicom
-    dataset = pydicom.dcmread(str(src))
+    if isinstance(src, pydicom.Dataset):
+        dataset = src
+    else:
+        dataset = pydicom.dcmread(str(pathlib.Path(src)))
 
     # mapping table
     if mapper is None:

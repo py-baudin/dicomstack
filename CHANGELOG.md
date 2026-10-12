@@ -8,6 +8,12 @@
 - Added: `workers=` threads for reading files (slow storage) in loads and volumes.
 - Added: `stack.iter_pixels(workers=)` and `as_volume(dtype=)`.
 - Added: `DicomStack(dedup=)`: duplicate detection by `"uid"` or `"content"`.
+- Added: `fields()`, `varying()`, `table()`, `to_dataframe()` to explore stacks.
+- Added: `groupby()`, `series()`, `stack[int]`, `stack[slice]`, `+`, `-`, `&`.
+- Added: `sort(missing=)`, `as_volume(stack=True)`, `DicomVolume.affine`.
+- Added: `DicomStack(include=, exclude=, recursive=, progress=)`.
+- Added: progress bar while loading (default: when stderr is a terminal).
+- Added: `DicomStack.from_datasets()`, `stack.export()`, type hints.
 - Added: `MultipleValuesError` and `NoValueError` raised by `single()`.
 - Added: `isin()` alias of `is_in()` on selectors.
 - Added: selector methods `between()`, `isclose()` and `exists()`.
@@ -24,6 +30,8 @@
 - Changed: queries are evaluated without `eval`.
 - Changed: `utils.FIELDS_TYPE_2`/`FIELDS_TYPE_3` list DICOM keywords.
 - Changed: the CLI exits with code 1 on errors; program name `dicomstack`.
+- Changed: `repr(stack)` shows frames, studies and series.
+- Changed: `utils.export_file` also accepts a pydicom dataset.
 
 ### Removed
 - Removed: `Query(expr, data)` string expressions (`Query(True)`/`Query(False)` remain).
@@ -53,3 +61,4 @@
 - Fixed: `copy`/`pickle` of selectors (special attributes became selectors).
 - Fixed: field filters raised `IndexError` on out-of-range indices (now skipped).
 - Fixed: `make_dataset` replaced given falsy values (e.g. `SeriesNumber=0`).
+- Fixed: `as_volume(by=)` with a multi-valued field (e.g. ImageOrientationPatient).

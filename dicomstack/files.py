@@ -1,6 +1,9 @@
 """ DICOM files and frames: reading headers and pixels, loading folders and zip files """
 
 import os
+import sys
+import copy
+import fnmatch
 import pathlib
 import re
 import hashlib
@@ -42,11 +45,12 @@ class Loader:
     dedup, workers, cache: see DicomStack
     """
 
-    def __init__(self, root=None, dedup="uid", workers=None, cache=None):
+    def __init__(self, root=None, dedup="uid", workers=None, cache=None, progress=None):
         self.root = root
         self._dedup = check_dedup(dedup)
         self._workers = workers
         self._cache = cache
+        self._progress = progress
         self.frames = []
         self.non_dicom = []
 
@@ -98,13 +102,16 @@ class Loader:
         else:
             contents = itertools.repeat(None)
 
-        for item in items:
+        progress = make_progress(self._progress, len(items))
+        for done, item in enumerate(items, start=1):
             if item in archives:
                 self._load_zipfile(item, *archives[item])
             elif item in cached:
                 self._load_cached(item, self._filepath(item), cached[item])
             else:
                 self._load_file(item, next(contents))
+            progress(done)
+        progress(None)
 
         if self._cache_new is not None:
             if self._cache_changed or set(self._cache_new) != set(self._cache_old):
@@ -263,6 +270,7 @@ class DicomFile:
     _identity = None
     _lookup = None
     _cache = None  # cache entry (header cache)
+    _memory = None  # in-memory pydicom dataset (from_dataset)
 
     def __init__(self, filename, bytes=None, *, source=None, dedup="uid"):
         """init DicomFile object (the header is read on demand)
@@ -285,6 +293,30 @@ class DicomFile:
         dicomfile._identity = entry["identity"]
         dicomfile.pixel_offset = entry["offset"]
         return dicomfile
+
+    @classmethod
+    def from_dataset(cls, dataset, filename, *, dedup="uid"):
+        """DicomFile from an in-memory pydicom dataset (with its pixel data)"""
+        if check_dedup(dedup) == "content":
+            raise ValueError("dedup='content' needs files, not in-memory datasets")
+        dicomfile = cls(filename, dedup=dedup)
+        dicomfile.source = None
+        dicomfile._memory = dataset
+        dicomfile._dataset = dataset
+        return dicomfile
+
+    def full_dataset(self):
+        """the file's complete pydicom dataset (with pixel data), read again"""
+        if self._memory is not None:
+            return copy.deepcopy(self._memory)
+        dataset, _ = read_dataset(self._read_bytes(), stop_before_pixels=False)
+        return dataset
+
+    def frame_keywords(self, index=None):
+        """keywords of the elements of frame `index`"""
+        if self._lookup is None:
+            self._lookup = FileLookup(self.dataset)
+        return list(self._lookup.frame_elements(index)[1])
 
     def cache_entry(self, stat):
         """header cache entry: converted values of all frames"""
@@ -316,6 +348,8 @@ class DicomFile:
                 self._identity = ("content", self.digest)
             elif uid:
                 self._identity = ("uid", str(uid))
+            elif self._memory is not None:
+                self._identity = ("memory", id(self._memory))
             else:
                 # never merged with other files
                 self._identity = ("source", self.source)
@@ -389,6 +423,8 @@ class DicomFile:
         """bytes needed to decode the pixels: the file from the pixel data element on,
         or the whole file if its position is unknown (I/O only: can run in a thread)
         """
+        if self._memory is not None:
+            return None
         self.dataset  # make sure the header is read
         if self.pixel_offset is None:
             return self._read_bytes()
@@ -398,7 +434,9 @@ class DicomFile:
 
     def _decode_pixels(self, data):
         """pixel array from the bytes returned by _read_pixel_bytes"""
-        if self.pixel_offset is None:
+        if self._memory is not None:
+            return self._memory.pixel_array
+        elif self.pixel_offset is None:
             # zip member, or unknown offset: parse the whole file
             dataset, _ = read_dataset(data, stop_before_pixels=False)
             return dataset.pixel_array
@@ -479,6 +517,13 @@ class DicomFrame:
         if not self._dataset:
             return "DICOM frame (pending)"
         return "DICOM frame\n" + str(self._dataset)
+
+    def keywords(self):
+        """keywords of the frame's elements (incl. automatic keywords of private ones)"""
+        cached = self.dicomfile.cached_frame(self.index)
+        if cached is not None:
+            return list(cached["k"])
+        return self.dicomfile.frame_keywords(self.index)
 
     @property
     def dataset(self):
@@ -605,8 +650,8 @@ def get_zip_path(path):
     return None
 
 
-def list_files(pathes):
-    """list all files in path and its sub folders"""
+def list_files(pathes, recursive=True):
+    """list all files in path and (if recursive) its sub folders"""
     if not isinstance(pathes, (list, tuple)):
         pathes = [pathes]
 
@@ -623,7 +668,8 @@ def list_files(pathes):
             if subpath.is_file():
                 files.append(subpath)
             else:
-                files.extend([file for file in subpath.rglob("*") if file.is_file()])
+                found = subpath.rglob("*") if recursive else subpath.glob("*")
+                files.extend([file for file in found if file.is_file()])
 
     if not files:  # empty
         return None, []
@@ -634,3 +680,55 @@ def list_files(pathes):
         root = root.parent
     filenames = [str(file.relative_to(root)) for file in files]
     return str(root), filenames
+
+
+def filter_filenames(filenames, include=None, exclude=None):
+    """filenames matching any `include` pattern and no `exclude` pattern
+
+    patterns (str or list of str, fnmatch syntax): matched against the file name and
+    against the whole (relative) path with "/" separators, e.g. "*.dcm", "series1/*"
+    """
+
+    def matches(filename, patterns):
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        path = str(filename).replace("\\", "/")
+        name = path.rsplit("/", 1)[-1]
+        return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(path, p) for p in patterns)
+
+    return [
+        filename
+        for filename in filenames
+        if (include is None or matches(filename, include))
+        and (exclude is None or not matches(filename, exclude))
+    ]
+
+
+def make_progress(progress, total):
+    """progress function (done, or None when finished)
+
+    progress: a callable(done, total), True (text progress bar on stderr),
+        "auto" (progress bar if stderr is a terminal), or None/False (no progress)
+    """
+    if progress == "auto":
+        progress = bool(getattr(sys.stderr, "isatty", None) and sys.stderr.isatty())
+    if progress is None or progress is False:
+        return lambda done: None
+    elif progress is True:
+        from .utils import ProgressBar
+
+        bar = ProgressBar(total)
+
+        def update(done):
+            if done is None:
+                bar.close()
+            else:
+                bar.update(done)
+
+        return update
+
+    def call(done):
+        if done is not None:
+            progress(done, total)
+
+    return call

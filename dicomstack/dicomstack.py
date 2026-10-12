@@ -2,16 +2,30 @@
 
 # coding=utf-8
 
+from __future__ import annotations
+
 import os
 import re
+import html
 import itertools
 from io import StringIO
 import logging
 import warnings
+from typing import Any, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
-from . import pixeldata
+import numpy as np
+import pydicom
+
+from . import pixeldata, utils
 from .query import Selector, Query
-from .files import DicomFrame, Loader, check_dedup, get_zip_path, list_files
+from .files import (
+    DicomFrame,
+    Loader,
+    check_dedup,
+    filter_filenames,
+    get_zip_path,
+    list_files,
+)
 from .elements import DicomTag
 
 # moved to .elements and .files: re-exported for backward compatibility
@@ -39,6 +53,28 @@ from .pixeldata import read_native_pixels  # noqa: F401
 
 LOGGER = logging.getLogger(__name__)
 
+# a field: keyword ("EchoTime", "ImageType_1", "[Private Name]"), selector or tag
+Field = Union[str, Selector, DicomTag, Tuple[int, int]]
+
+
+# fields ignored by DicomStack.varying: per-instance values
+VARYING_EXCLUDE = (
+    "SOPInstanceUID",
+    "MediaStorageSOPInstanceUID",
+    "FileMetaInformationGroupLength",
+    "InstanceNumber",
+    "ImagePositionPatient",
+    "SliceLocation",
+    "AcquisitionTime",
+    "AcquisitionDateTime",
+    "ContentTime",
+    "InstanceCreationTime",
+    "WindowCenter",
+    "WindowWidth",
+    "SmallestImagePixelValue",
+    "LargestImagePixelValue",
+)
+
 
 class DuplicatedFramesError(Exception):
     """raise when duplicated frames are found"""
@@ -64,12 +100,22 @@ class DicomStack(object):
         dedup="uid",
         workers=None,
         cache=None,
+        include=None,
+        exclude=None,
+        recursive=True,
+        progress="auto",
     ):
         """path can be:
         * a directory (or a list of),
         * a file (or a list of)
         * a zip file
 
+        include, exclude: file name patterns (str or list, fnmatch syntax, e.g. "*.dcm"),
+            matched against the file names and the relative paths ("/" separators);
+            zip files are filtered by their name, not their members
+        recursive: search sub-folders
+        progress: progress bar on stderr: "auto" (if stderr is a terminal), True, False;
+            or a callable(done, total)
         duplicates: 'remove', 'error', 'ignore'
         dedup: how duplicated frames are detected
             'uid': same SOPInstanceUID and frame index (files without UID are never merged)
@@ -81,9 +127,7 @@ class DicomStack(object):
             in the data folder, or the user cache directory if not writable);
             "refresh": rebuild the cache at the default location; or a path
         """
-        self._dedup = check_dedup(dedup)
-        self._workers = workers
-        self._cache = cache
+        check_dedup(dedup)
 
         self.frames = []
         self.non_dicom = []
@@ -94,11 +138,14 @@ class DicomStack(object):
 
         elif not filenames:
             # search path
-            root, filenames = list_files(path)
+            root, filenames = list_files(path, recursive=recursive)
             self.root = root
 
         elif not isinstance(filenames, (list, tuple)):
             filenames = [filenames]
+
+        if include is not None or exclude is not None:
+            filenames = filter_filenames(filenames, include, exclude)
 
         if not filenames:
             # empty stack
@@ -107,10 +154,29 @@ class DicomStack(object):
 
         # load dicom files
         LOGGER.info("New DICOM stack (from %s files)", len(filenames))
-        self._load_files(filenames, duplicates)
+        loader = Loader(self.root, dedup, workers, cache, progress)
+        self.frames, self.non_dicom = loader.load(filenames)
+        self._check_duplicates(duplicates)
 
     @classmethod
-    def from_frames(cls, frames, root=None):
+    def from_datasets(
+        cls, datasets: Iterable[pydicom.Dataset], *, duplicates: str = "remove"
+    ) -> DicomStack:
+        """create a stack from in-memory pydicom datasets (with their pixel data)
+
+        The datasets are not copied (frames read their values when accessed).
+        """
+        stack = cls()
+        for i, dataset in enumerate(datasets):
+            filename = getattr(dataset, "filename", None)
+            if not isinstance(filename, str) or not filename:
+                filename = f"dataset_{i + 1}.dcm"
+            stack.frames.extend(DicomFile.from_dataset(dataset, filename).frames)
+        stack._check_duplicates(duplicates)
+        return stack
+
+    @classmethod
+    def from_frames(cls, frames: Iterable[DicomFrame], root: Optional[str] = None) -> DicomStack:
         """create a new stack from list of frames"""
         LOGGER.debug("New DICOM stack (from %s frames)", len(frames))
         if not all([isinstance(frame, DicomFrame) for frame in frames]):
@@ -121,27 +187,162 @@ class DicomStack(object):
         stack.root = root
         return stack
 
-    def __len__(self):
+    def __len__(self) -> int:
         """number of DICOM images"""
         return len(self.frames)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         """return True if stack is not empty"""
         return len(self) > 0
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[DicomFrame]:
         """iterates dicom frames"""
         return iter(self.frames)
 
-    def __repr__(self):
-        return "DICOM(%d)" % len(self)
+    def __repr__(self) -> str:
+        """DICOM(2000 frames | 1 study | 10 series)"""
+        if not self.frames:
+            return "DICOM(0 frames)"
+        nframe = len(self)
+        nstudy = len({frame.get("StudyInstanceUID") for frame in self.frames})
+        nseries = len({frame.get("SeriesInstanceUID") for frame in self.frames})
+        return (
+            f"DICOM({nframe} frame{'s' * (nframe != 1)} | "
+            f"{nstudy} stud{'ies' if nstudy != 1 else 'y'} | {nseries} series)"
+        )
 
-    def __contains__(self, field):
+    def _repr_html_(self) -> str:
+        """Jupyter: description of the stack"""
+        return f"<pre>{html.escape(repr(self))}\n{html.escape(self.describe())}</pre>"
+
+    def __contains__(self, field: Field) -> bool:
         """short for has_field"""
         return self.has_field(field)
 
+    # set operations on frames (order of the left operand kept)
+
+    def __add__(self, other: DicomStack) -> DicomStack:
+        """union of the frames"""
+        if not isinstance(other, DicomStack):
+            return NotImplemented
+        seen = set(self.frames)
+        frames = list(self.frames)
+        for frame in other.frames:
+            if not frame in seen:
+                seen.add(frame)
+                frames.append(frame)
+        return self._from_set_operation(frames, other)
+
+    def __sub__(self, other: DicomStack) -> DicomStack:
+        """frames not in other"""
+        if not isinstance(other, DicomStack):
+            return NotImplemented
+        others = set(other.frames)
+        return self._from_set_operation([f for f in self.frames if not f in others], other)
+
+    def __and__(self, other: DicomStack) -> DicomStack:
+        """frames also in other"""
+        if not isinstance(other, DicomStack):
+            return NotImplemented
+        others = set(other.frames)
+        return self._from_set_operation([f for f in self.frames if f in others], other)
+
+    def _from_set_operation(self, frames, other):
+        # filenames are relative to the common root, absolute otherwise
+        root = self.root if self.root == other.root else None
+        return self.from_frames(frames, root=root)
+
+    # exploring
+
+    def fields(self, how: str = "all") -> list[str]:
+        """keywords of the elements present in all (how="all") or any (how="any") frames"""
+        keywords = [set(frame.keywords()) for frame in self.frames]
+        if not keywords:
+            return []
+        elif how == "all":
+            return sorted(set.intersection(*keywords))
+        elif how == "any":
+            return sorted(set.union(*keywords))
+        raise ValueError(f"Invalid value for how: {how}")
+
+    def varying(
+        self,
+        within: Union[Field, Sequence[Field], None] = None,
+        exclude: Optional[Iterable[str]] = None,
+    ) -> list[str]:
+        """keywords of the fields whose values differ across frames
+
+        within: field(s): fields varying within the groups of the same value(s)
+            (e.g. "SeriesNumber": fields varying inside a series)
+        exclude: fields to ignore (default: VARYING_EXCLUDE, per-instance fields)
+        Sequences are ignored.
+        """
+        exclude = set(VARYING_EXCLUDE if exclude is None else exclude)
+        if within is None:
+            groups = [self]
+        else:
+            within = [within] if isinstance(within, str) else list(within)
+            groups = [substack for _, substack in self.groupby(*within)]
+        candidates = [field for field in self.fields("any") if not field in exclude]
+        varying = set()
+        for substack in groups:
+            for field in candidates:
+                if field in varying:
+                    continue
+                values = set()
+                try:
+                    for frame in substack:
+                        values.add(frame.get(field))
+                        if len(values) > 1:
+                            varying.add(field)
+                            break
+                except TypeError:
+                    # not hashable (sequences)
+                    continue
+        return sorted(varying)
+
+    def table(self, *fields: Field) -> list[dict]:
+        """list of {field: value} for each frame (default fields: fields())"""
+        fields = fields or self.fields()
+        return [{field: frame.get(field) for field in fields} for frame in self.frames]
+
+    def to_dataframe(self, *fields: Field) -> Any:
+        """pandas DataFrame of the fields' values (one row per frame); requires pandas"""
+        try:
+            import pandas
+        except ImportError:
+            raise ImportError("pandas is required for to_dataframe (pip install pandas)")
+        fields = fields or self.fields()
+        return pandas.DataFrame(self.table(*fields), columns=list(fields))
+
+    def export(self, dest: Union[str, os.PathLike], anonymize: bool = True, **kwargs) -> list:
+        """export (anonymized) copies of the stack's files in folder dest
+
+        Files keep their path relative to the stack's root (their name without root).
+        kwargs: see utils.export_file (mapper, mapkey, remove_private_tags, overwrite)
+        Returns the exported files.
+        """
+        exported = []
+        done = set()
+        for frame in self.frames:
+            dicomfile = frame.dicomfile
+            if id(dicomfile) in done:
+                continue
+            done.add(id(dicomfile))
+            if self.root:
+                relpath = self._filename(frame)
+            else:
+                relpath = os.path.basename(str(dicomfile.filename))
+            destfile = os.path.join(str(dest), relpath)
+            exported.append(
+                utils.export_file(
+                    dicomfile.full_dataset(), destfile, anonymize=anonymize, **kwargs
+                )
+            )
+        return exported
+
     @property
-    def filenames(self):
+    def filenames(self) -> list[str]:
         """return list of dicom files"""
         return [self._filename(frame) for frame in self.frames]
 
@@ -151,13 +352,13 @@ class DicomStack(object):
         return os.path.relpath(filename, self.root) if self.root else filename
 
     @property
-    def zipfiles(self):
+    def zipfiles(self) -> list[str]:
         """return path to zip files"""
         zipfiles = {get_zip_path(file) for file in self.filenames}
         return list(zipfiles)
 
     @property
-    def dicomtree(self):
+    def dicomtree(self) -> dict:
         """return DICOM-tree"""
         LOGGER.info("Make dicom tree")
 
@@ -217,11 +418,13 @@ class DicomStack(object):
 
         return tree
 
-    def describe(self, **kwargs):
+    def describe(self, **kwargs) -> str:
         """method for self description"""
         return describe(self.dicomtree, **kwargs)
 
-    def __call__(self, query=None, *, strict=False, **filters):
+    def __call__(
+        self, query: Optional[Query] = None, *, strict: bool = False, **filters
+    ) -> DicomStack:
         """short for filter_by_field or filter_by_query
 
         strict: (queries) raise the errors of comparisons instead of excluding the frames
@@ -231,8 +434,12 @@ class DicomStack(object):
         return self.filter_by_field(**filters)
 
     def __getitem__(self, items):
-        """short for get_field_values"""
-        if DicomTag.is_tag(items) or not isinstance(items, (tuple, list)):
+        """stack[int]: frame, stack[slice]: substack, else short for get_field_values"""
+        if isinstance(items, int) and not isinstance(items, bool):
+            return self.frames[items]
+        elif isinstance(items, slice):
+            return self.from_frames(self.frames[items], root=self.root)
+        elif DicomTag.is_tag(items) or not isinstance(items, (tuple, list)):
             items = [items]
         return self.get_field_values(*items)
 
@@ -242,7 +449,7 @@ class DicomStack(object):
             return self.select(name)
         return getattr(super(), name)
 
-    def single(self, *fields, default=..., precision=None):
+    def single(self, *fields: Field, default: Any = ..., precision: Optional[int] = None) -> Any:
         """return single value for field"""
         values = self.get_field_values(*fields, ignore_missing=True)
         if not values and default is not ...:
@@ -269,17 +476,17 @@ class DicomStack(object):
             raise NoValueError("No value found for %s" % (fields,))
         return values.pop()
 
-    def unique(self, *fields):
+    def unique(self, *fields: Field) -> list:
         """return unique values for field"""
         return sorted(set(self.get_field_values(*fields, ignore_missing=True)))
 
-    def filter_by_field(self, **filters):
+    def filter_by_field(self, **filters) -> DicomStack:
         """return a sub stack with matching values for the given field"""
         LOGGER.debug("Filter by fields: %s", filters)
         frames = self._filter(filters)
         return self.from_frames(frames, root=self.root)
 
-    def filter_by_query(self, query, strict=False):
+    def filter_by_query(self, query: Query, strict: bool = False) -> DicomStack:
         """return a sub stack with from frames with validated queries
 
         strict: raise the errors of comparisons (TypeError, AttributeError, e.g. comparing
@@ -289,7 +496,9 @@ class DicomStack(object):
         frames = [frame for frame in self.frames if query.execute(frame.get, strict=strict)]
         return self.from_frames(frames, root=self.root)
 
-    def get_field_values(self, field, *fields, ignore_missing=False):
+    def get_field_values(
+        self, field: Field, *fields: Field, ignore_missing: bool = False
+    ) -> list:
         """return a list a values for the given fields"""
         _fields = (field,) + fields
         LOGGER.debug("Get fields' values: %s", _fields)
@@ -340,14 +549,42 @@ class DicomStack(object):
         else:
             return self.from_frames(frames, root=self.root)
 
-    def sort(self, *fields):
-        """reindex database using field values (skip frames with missing values)"""
+    def sort(self, *fields: Field, missing: str = "drop") -> DicomStack:
+        """reindex database using field values
+
+        missing: frames with missing values:
+            "drop" (removed), "last" (kept at the end, in their order), "error" (NoValueError)
+        """
         LOGGER.debug("Sort by fields: %s", fields)
+        if not missing in ("drop", "last", "error"):
+            raise ValueError(f"Invalid value for missing: {missing}")
         frames = self._existing(fields)
         sorted_frames = sorted(frames, key=lambda f: tuple(f[field] for field in fields))
+        if len(frames) < len(self):
+            if missing == "error":
+                raise NoValueError(f"Missing values for {fields} in {len(self) - len(frames)} frames")
+            elif missing == "last":
+                existing = set(map(id, frames))
+                sorted_frames += [frame for frame in self.frames if not id(frame) in existing]
         return self.from_frames(sorted_frames, root=self.root)
 
-    def getaxis(self):
+    def groupby(self, *fields: Field) -> Iterator[Tuple[Any, DicomStack]]:
+        """iterate (values, substack) for each value of the field(s), in sorted order
+
+        values: a value (one field) or a tuple of values; frames with missing values are skipped
+        """
+        groups = {}
+        for frame in self._existing(fields):
+            values = tuple(frame[field] for field in fields)
+            groups.setdefault(values[0] if len(fields) == 1 else values, []).append(frame)
+        for values in sorted(groups):
+            yield values, self.from_frames(groups[values], root=self.root)
+
+    def series(self) -> Iterator[Tuple[str, DicomStack]]:
+        """iterate (SeriesInstanceUID, substack) for each series"""
+        return self.groupby("SeriesInstanceUID")
+
+    def getaxis(self) -> int:
         """return the image acquisition axis with respect to the patient"""
         orient = self.single("ImageOrientationPatient", precision=3)
         vec = (
@@ -357,7 +594,7 @@ class DicomStack(object):
         )
         return vec.index(max(vec))
 
-    def reorder(self):
+    def reorder(self) -> DicomStack:
         """reindex stack based on spatial information"""
         if len(self) <= 1:
             return self
@@ -371,12 +608,12 @@ class DicomStack(object):
                 "Could not sort stack spatially: non-unique slice locations"
             )
 
-    def has_field(self, field, how="all"):
+    def has_field(self, field: Field, how: str = "all") -> bool:
         """return True if all frame have the given field"""
         func = all if how == "all" else any
         return func(frame.get(field) is not None for frame in self.frames)
 
-    def iter_pixels(self, workers=None):
+    def iter_pixels(self, workers: Optional[int] = None) -> Iterator[np.ndarray]:
         """iterate the frames' pixel arrays
 
         workers: number of threads reading the files ahead (I/O only; useful on slow storage)
@@ -411,13 +648,17 @@ class DicomStack(object):
         strict=False,
         dtype=None,
         workers=None,
+        stack=False,
     ):
         """as volume
 
+        by: field(s): one volume per value, returns (values, volumes)
         tol: relative tolerance on the uniformity of the slice spacing
         strict: if True, raise ValueError on non-uniform slice spacing (else warn)
         dtype: data type of the volume (default: float64)
         workers: number of threads reading the pixels (I/O only; useful on slow storage)
+        stack: (with `by`) return a single volume (x, y, z, n) instead, with the values
+            of the `by` fields in vol.metadata[field] (as strings)
         """
         LOGGER.debug("Make volume (use fields: %s)", by)
 
@@ -439,28 +680,16 @@ class DicomStack(object):
             # single non-indexed volume
             return make_volume(self)
 
-        # else: indexed volumes
-
-        # unique values
-        if isinstance(by, str):
-            by = [by]
-        indices = sorted(set(self.get_field_values(*by, ignore_missing=True)))
-
-        # index values for each volume
-        if not indices:
-            # empty stack
-            return [], []
-        elif len(by) == 1:
-            filters = [{by[0]: value} for value in indices]
-        else:
-            filters = [
-                dict((field, value) for field, value in zip(by, values))
-                for values in indices
-            ]
-
-        # create volumes
-        volumes = [make_volume(self.filter_by_field(**filter)) for filter in filters]
-        return indices, volumes
+        # else: indexed volumes, one per (sorted) value of the `by` field(s)
+        by = [by] if isinstance(by, str) else list(by)
+        groups = list(self.groupby(*by))
+        indices = [values for values, _ in groups]
+        volumes = [make_volume(substack) for _, substack in groups]
+        if not stack:
+            return indices, volumes
+        elif not volumes:
+            return None
+        return stack_volumes(volumes, by, indices)
 
     def _existing(self, fields):
         """return frames with existing values"""
@@ -496,16 +725,12 @@ class DicomStack(object):
             filtered.append(frame)
         return filtered
 
-    def select(self, sel):
+    def select(self, sel: Union[str, Tuple[int, int]]) -> Selector:
         """return query Selector (same as DICOM[sel])"""
         return DICOM[sel]
 
-    def _load_files(self, filenames, duplicates):
-        """load filenames"""
-        loader = Loader(self.root, self._dedup, self._workers, self._cache)
-        self.frames, self.non_dicom = loader.load(filenames)
-
-        # duplicates
+    def _check_duplicates(self, duplicates):
+        """duplicated frames: 'remove', 'error', 'ignore'"""
         unique_frames = set(self.frames)
         nframes = len(unique_frames)
         if len(self) != nframes:
@@ -522,9 +747,6 @@ class DicomStack(object):
                     for frame in self.frames
                     if not (frame in duplicated or duplicated.add(frame))
                 ]
-
-    # header cache
-
 
 def describe(dicomtree, regex=None):
     """return string description of dicomtree"""
@@ -567,3 +789,28 @@ def _series_key(seriesnumber):
         return (0, int(seriesnumber), "")
     except ValueError:
         return (1, 0, seriesnumber)
+
+
+def stack_volumes(volumes, fields, indices, tol=1e-6):
+    """stack volumes with the same geometry in a single (x, y, z, n) volume
+
+    the values (indices) of `fields` are stored in the volume's metadata (as strings)
+    """
+    first = volumes[0]
+    for volume in volumes[1:]:
+        if volume.shape != first.shape or not all(
+            np.allclose(getattr(volume, name), getattr(first, name), atol=tol)
+            for name in ("origin", "spacing", "transform")
+        ):
+            raise ValueError("Cannot stack volumes with different shapes or geometries")
+    if len(fields) == 1:
+        metadata = {fields[0]: str(list(indices))}
+    else:
+        metadata = {field: str([values[i] for values in indices]) for i, field in enumerate(fields)}
+    return pixeldata.DicomVolume(
+        np.stack([np.asarray(volume) for volume in volumes], axis=-1),
+        origin=first.origin,
+        spacing=first.spacing,
+        transform=first.transform,
+        metadata=metadata,
+    )
