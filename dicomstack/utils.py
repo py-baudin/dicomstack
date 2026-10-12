@@ -253,6 +253,19 @@ def write_dataset(
     **kwargs,
 ):
     """ write valid DICOM file """
+    # SOP class
+    if media_storage_class == "MRI":
+        sop_class_uid = pydicom.uid.MRImageStorage
+    elif media_storage_class == "MRS":
+        sop_class_uid = pydicom.uid.MRSpectroscopyStorage
+    elif media_storage_class in pydicom.uid.UID_dictionary:
+        sop_class_uid = pydicom.uid.UID(media_storage_class)
+    else:
+        raise ValueError("Unknown media storage class UID: %s" % media_storage_class)
+    kwargs.setdefault("SOPClassUID", sop_class_uid)
+    # new instance (also when derived from a reference dataset)
+    kwargs.setdefault("SOPInstanceUID", generate_uid())
+
     if dataset is not None:
         dataset = update_dataset(dataset, data=data, **kwargs)
     else:
@@ -263,19 +276,18 @@ def write_dataset(
     LOGGER.debug("Setting file meta information.")
     file_meta = pydicom.dataset.FileMetaDataset()
     # Populate required values for file meta information
-    if media_storage_class == "MRI":
-        file_meta.MediaStorageSOPClassUID = "1.2.840.10008.5.1.4.1.1.4"
-    elif media_storage_class == "MRS":
-        file_meta.MediaStorageSOPClassUID = "1.2.840.10008.5.1.4.1.1.4.2"
-    elif not media_storage_class in pydicom.uid.UID_dictionary:
-        raise ValueError("Unknown media storage class UID: %s" % media_storage_class)
-    file_meta.MediaStorageSOPInstanceUID = "1.2.3"
-    file_meta.ImplementationClassUID = "1.2.3.4"
-    file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+    file_meta.MediaStorageSOPClassUID = dataset.SOPClassUID
+    file_meta.MediaStorageSOPInstanceUID = dataset.SOPInstanceUID
+    file_meta.ImplementationClassUID = pydicom.uid.PYDICOM_IMPLEMENTATION_UID
+    file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
 
     dataset = pydicom.FileDataset(
         filename, dataset, file_meta=file_meta, preamble=b"\0" * 128
     )
+    if PYDICOM_MAJOR < 3:
+        # encoding set from the transfer syntax in pydicom 3
+        dataset.is_little_endian = True
+        dataset.is_implicit_VR = False
 
     # write dataset
     LOGGER.debug("Writing file: %s", filename)
@@ -283,7 +295,7 @@ def write_dataset(
         LOGGER.debug("Setting file extension to: %s", ext)
         basename = os.path.splitext(filename)[0]
         filename = basename + ext
-    save_as(dataset, filename, enforce_file_format=False)
+    save_as(dataset, filename, enforce_file_format=True)
 
 
 def update_dataset(dataset, data=None, dtype="uint16", **tags):
@@ -321,16 +333,16 @@ def make_dataset(data, dtype="uint16", **tags):
     # material
     default("Modality", "MR")
     default("Manufacturer", "")
-    # reference
-    # default("FrameOfReferenceUID", None)
-    # default("PositionReferenceIndicator", None)
+    # instance
+    default("SOPClassUID", pydicom.uid.MRImageStorage)
+    default("SOPInstanceUID", generate_uid())
     # geometry
     default("PixelSpacing", [1, 1])  # overwritten with data's metadata
     default("SliceThickness", 1)
-    default("ImageOrientationPatient", [1, 0, 0, 0, 1, 0, 0, 0, 1])
+    default("ImageOrientationPatient", [1, 0, 0, 0, 1, 0])
     default("ImagePositionPatient", [0, 0, 0])
     # MR image
-    default("PhotometricInterpretation", "MONOCHROME1")
+    default("PhotometricInterpretation", "MONOCHROME2")
     default("ImageType", ["DERIVED", "PRIMARY"])
     default("ScanningSequence", "RM")
     default("SequenceVariant", "NONE")
@@ -344,6 +356,12 @@ def make_dataset(data, dtype="uint16", **tags):
     default("SeriesInstanceUID", generate_uid())
     default("AccessionNumber", "")
     default("InstanceNumber", 1)
+    # frame of reference: same for all images of a series, unless given
+    series_uid = str(getattr(tags["SeriesInstanceUID"], "value", tags["SeriesInstanceUID"]))
+    default(
+        "FrameOfReferenceUID",
+        generate_uid(entropy_srcs=[series_uid, "FrameOfReferenceUID"]),
+    )
 
     # data
     if not isinstance(data, bytes):
