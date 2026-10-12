@@ -169,6 +169,9 @@ PLAN.md
 # benchmark data
 benchmarks/data/
 
+# dicomstack header cache
+.dicomstack-cache.json.gz
+
 # golden data
 test/golden/
 

@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- Added: `DicomStack(cache=)`: optional header cache file for faster reloads.
+- Added: `--cache` option of the `list`, `elements` and `values` commands.
+- Added: `workers=` threads for reading files (slow storage) in loads and volumes.
+- Added: `stack.iter_pixels(workers=)` and `as_volume(dtype=)`.
 - Added: `DicomStack(dedup=)`: duplicate detection by `"uid"` or `"content"`.
 - Added: `MultipleValuesError` and `NoValueError` raised by `single()`.
 - Added: `isin()` alias of `is_in()` on selectors.
@@ -12,6 +16,8 @@
 - Changed: requires Python >= 3.10 and pydicom >= 3, < 4.
 - Changed: duplicates detected by SOPInstanceUID; dedup="content" for the old behaviour.
 - Changed: file bytes are no longer kept in memory; fields are converted on access.
+- Changed: uncompressed pixel data is read directly, without parsing the file again.
+- Changed: warnings point to the calling code.
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.

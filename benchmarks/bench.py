@@ -49,25 +49,50 @@ def op_unique(stack):
     stack.unique("SeriesNumber", "EchoTime")
 
 
+def op_pixels(stack):
+    for frame in stack:
+        frame.pixels
+
+
 def op_as_volume(stack):
     stack.as_volume(by=["SeriesNumber", "EchoTime"])
+
+
+def op_pixels_workers(stack):
+    for _ in stack.iter_pixels(workers=WORKERS):
+        pass
+
+
+def op_as_volume_workers(stack):
+    stack.as_volume(by=["SeriesNumber", "EchoTime"], workers=WORKERS)
+
+
+WORKERS = 8
 
 
 def op_describe(stack):
     stack.describe()
 
 
-# scenario: (path relative to data folder, operation)
+# scenario: (path relative to data folder, operation[, DicomStack options])
 SCENARIOS = {
     "load": ("stack", None),
+    "load_workers": ("stack", None, {"workers": WORKERS}),
     "first_access": ("stack", op_first_access),
     "20_fields": ("stack", op_20_fields),
     "filter": ("stack", op_filter),
     "query": ("stack", op_query),
     "unique": ("stack", op_unique),
+    "pixels": ("stack", op_pixels),
+    "pixels_workers": ("stack", op_pixels_workers),
     "as_volume": ("stack", op_as_volume),
+    "as_volume_workers": ("stack", op_as_volume_workers),
     "describe": ("stack", op_describe),
     "zip_first_access": ("stack.zip", op_first_access),
+    # header cache: built by cache_build, used by the next ones
+    "cache_build": ("stack", None, {"cache": "refresh"}),
+    "cache_load": ("stack", None, {"cache": True}),
+    "cache_20_fields": ("stack", op_20_fields, {"cache": True}),
     "multi_first_access": ("multi", op_first_access),
 }
 
@@ -118,9 +143,9 @@ def run_scenario(name, data):
     """run a single scenario in this process, print json results"""
     from dicomstack import DicomStack
 
-    path, operation = SCENARIOS[name]
+    path, operation, *options = SCENARIOS[name]
     t0 = time.perf_counter()
-    stack = DicomStack(os.path.join(data, path))
+    stack = DicomStack(os.path.join(data, path), **(options[0] if options else {}))
     t1 = time.perf_counter()
     if operation:
         operation(stack)

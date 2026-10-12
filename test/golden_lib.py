@@ -118,9 +118,9 @@ def make_generated(dest, nseries=2, nechoes=2, nslices=5):
 # snapshot
 
 
-def snapshot(paths):
-    """return {fixture: snapshot}"""
-    return {name: snapshot_stack(DicomStack(path)) for name, path in paths.items()}
+def snapshot(paths, **options):
+    """return {fixture: snapshot} (options: DicomStack options)"""
+    return {name: snapshot_stack(DicomStack(path, **options)) for name, path in paths.items()}
 
 
 def snapshot_stack(stack):

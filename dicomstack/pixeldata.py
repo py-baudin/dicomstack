@@ -1,41 +1,22 @@
 """ Pixel data manipulation """
 
 # coding=utf-8
+import os
+import sys
 import math
 import warnings
 
-try:
-    import numpy as np
-except ImportError:
-    # no pixel array support
-    AVAILABLE = False
-else:
-    AVAILABLE = True
+import numpy as np
 
 
-def check_available():
-    """check functions are available"""
-    if not AVAILABLE:
-        raise NotImplementedError("numpy is required")
-
-
-def available(func):
-    """decorator"""
-
-    def wrapped(*args, **kwargs):
-        check_available()
-        return func(*args, **kwargs)
-
-    return wrapped
-
-
-@available
-def make_volume(frames, rescale=True, tol=1e-3, strict=False):
+def make_volume(frames, rescale=True, tol=1e-3, strict=False, dtype=None):
     """return volume from a sequence of frames
 
     tol: relative tolerance on the uniformity of the slice spacing
     strict: if True, raise ValueError on non-uniform slice spacing (else warn)
+    dtype: data type of the volume (default: float64)
     """
+    dtype = np.dtype(dtype or "float64")
 
     # find geometry
     nframe = len(frames)
@@ -77,7 +58,7 @@ def make_volume(frames, rescale=True, tol=1e-3, strict=False):
     slices = []
     for frame in frames:
         slope, intercept = 1, 0
-        pixels = 1.0 * frame.pixels
+        pixels = frame.pixels.astype(dtype)
         if rescale:
             slope = frame.get("RescaleSlope", default=1)
             intercept = frame.get("RescaleIntercept", default=0)
@@ -102,125 +83,131 @@ def check_slice_spacing(frames, origin, ax3, spacing3, tol=1e-3, strict=False):
     )
     if strict:
         raise ValueError(msg)
-    # caller of DicomStack.as_volume (both functions are wrapped by `available`)
-    warnings.warn(msg, stacklevel=6)
+    warnings.warn(msg, stacklevel=external_stacklevel())
 
 
-if AVAILABLE:
+def external_stacklevel():
+    """stacklevel of the first caller outside the dicomstack package (for warnings.warn)"""
+    package = os.path.dirname(os.path.abspath(__file__))
+    frame, level = sys._getframe(2), 2
+    while frame is not None and os.path.dirname(frame.f_code.co_filename) == package:
+        frame, level = frame.f_back, level + 1
+    return level
 
-    class DicomVolume(np.ndarray):
-        """simple layer over np ndarray to add geometry and metadata
 
-        Same attributes as tomio.volume.Volume (`tomio.asvolume(vol)` converts it):
-            spacing: voxel size along each axis
-            origin: LPS coordinates of voxel (0, 0, 0)
-            transform: LPS direction of each axis (transform[i]: axis i)
-            metadata: dict of str
-        """
+class DicomVolume(np.ndarray):
+    """simple layer over np ndarray to add geometry and metadata
 
-        GEOMETRY = ("origin", "spacing", "transform")
+    Same attributes as tomio.volume.Volume (`tomio.asvolume(vol)` converts it):
+        spacing: voxel size along each axis
+        origin: LPS coordinates of voxel (0, 0, 0)
+        transform: LPS direction of each axis (transform[i]: axis i)
+        metadata: dict of str
+    """
 
-        @property
-        def tags(self):
-            """geometry as a dict (deprecated: use origin, spacing, transform)"""
+    GEOMETRY = ("origin", "spacing", "transform")
+
+    @property
+    def tags(self):
+        """geometry as a dict (deprecated: use origin, spacing, transform)"""
+        warnings.warn(
+            "DicomVolume.tags is deprecated: use origin, spacing and transform",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return {name: getattr(self, name) for name in self.GEOMETRY}
+
+    def __new__(
+        cls,
+        input_array,
+        *,
+        spacing=None,
+        origin=None,
+        transform=None,
+        metadata=None,
+        tags=None,
+    ):
+        """create Volume object"""
+        obj = np.asarray(input_array).view(cls)
+        if tags is not None:
             warnings.warn(
-                "DicomVolume.tags is deprecated: use origin, spacing and transform",
+                "DicomVolume(tags=...) is deprecated: "
+                "use origin=, spacing= and transform=",
                 DeprecationWarning,
                 stacklevel=2,
             )
-            return {name: getattr(self, name) for name in self.GEOMETRY}
+        geometry = dict(tags or {})
+        for name, value in zip(cls.GEOMETRY, (origin, spacing, transform)):
+            if value is not None:
+                geometry[name] = value
+        obj.origin = geometry.get("origin")
+        obj.spacing = geometry.get("spacing")
+        obj.transform = geometry.get("transform")
+        obj.metadata = metadata
+        return obj
 
-        def __new__(
-            cls,
-            input_array,
-            *,
-            spacing=None,
-            origin=None,
-            transform=None,
-            metadata=None,
-            tags=None,
-        ):
-            """create Volume object"""
-            obj = np.asarray(input_array).view(cls)
-            if tags is not None:
-                warnings.warn(
-                    "DicomVolume(tags=...) is deprecated: "
-                    "use origin=, spacing= and transform=",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-            geometry = dict(tags or {})
-            for name, value in zip(cls.GEOMETRY, (origin, spacing, transform)):
-                if value is not None:
-                    geometry[name] = value
-            obj.origin = geometry.get("origin")
-            obj.spacing = geometry.get("spacing")
-            obj.transform = geometry.get("transform")
-            obj.metadata = metadata
-            return obj
+    @property
+    def metadata(self):
+        return self._metadata
 
-        @property
-        def metadata(self):
-            return self._metadata
+    @metadata.setter
+    def metadata(self, metadata):
+        metadata = metadata or {}
+        self._metadata = {str(key): str(value) for key, value in metadata.items()}
 
-        @metadata.setter
-        def metadata(self, metadata):
-            metadata = metadata or {}
-            self._metadata = {str(key): str(value) for key, value in metadata.items()}
+    def __array_finalize__(self, obj):
+        if obj is None:
+            return
+        for name in self.GEOMETRY:
+            setattr(self, name, getattr(obj, name, None))
+        self.metadata = getattr(obj, "metadata", None)
 
-        def __array_finalize__(self, obj):
-            if obj is None:
-                return
-            for name in self.GEOMETRY:
-                setattr(self, name, getattr(obj, name, None))
-            self.metadata = getattr(obj, "metadata", None)
+    def has_geometry(self):
+        return get_geometry(self) is not None
 
-        def has_geometry(self):
-            return all(getattr(self, name) is not None for name in self.GEOMETRY)
+    def __getitem__(self, key):
+        """geometry-aware slicing (as tomio.volume.Volume)
 
-        def __getitem__(self, key):
-            """geometry-aware slicing (as tomio.volume.Volume)
-
-            slices on the spatial axes (first 3): geometry updated
-            other indexing on the spatial axes (integer, array, None): plain ndarray
-            """
-            result = super().__getitem__(key)
-            if not isinstance(result, DicomVolume) or self.ndim < 3:
-                return result
-            slices = get_spatial_slices(key, self.ndim)
-            if slices is None:
-                return result.view(np.ndarray)
-            elif not self.has_geometry():
-                return result
-
-            starts, steps = [], []
-            for sl, size in zip(slices, self.shape[:3]):
-                start, _, step = sl.indices(size)
-                starts.append(start)
-                steps.append(step)
-            result.origin = tuple(
-                float(o + sum(i * s * t[d] for i, s, t in zip(starts, self.spacing, self.transform)))
-                for d, o in enumerate(self.origin)
-            )
-            result.spacing = tuple(
-                s * abs(step) for s, step in zip(self.spacing, steps)
-            ) + tuple(self.spacing[3:])
-            result.transform = tuple(
-                tuple(v * (1 if step > 0 else -1) for v in t)
-                for t, step in zip(self.transform, steps)
-            )
+        slices on the spatial axes (first 3): geometry updated
+        other indexing on the spatial axes (integer, array, None): plain ndarray
+        """
+        result = super().__getitem__(key)
+        if not isinstance(result, DicomVolume) or self.ndim < 3:
+            return result
+        slices = get_spatial_slices(key, self.ndim)
+        if slices is None:
+            return result.view(np.ndarray)
+        elif not self.has_geometry():
             return result
 
-        def __reduce__(self):
-            """prevent pickling"""
-            raise NotImplementedError("Cannot pickle DicomVolume object")
+        starts, steps = [], []
+        for sl, size in zip(slices, self.shape[:3]):
+            start, _, step = sl.indices(size)
+            starts.append(start)
+            steps.append(step)
+        result.origin = tuple(
+            float(o + sum(i * s * t[d] for i, s, t in zip(starts, self.spacing, self.transform)))
+            for d, o in enumerate(self.origin)
+        )
+        result.spacing = tuple(
+            s * abs(step) for s, step in zip(self.spacing, steps)
+        ) + tuple(self.spacing[3:])
+        result.transform = tuple(
+            tuple(v * (1 if step > 0 else -1) for v in t)
+            for t, step in zip(self.transform, steps)
+        )
+        return result
 
-        def __array_wrap__(self, out_arr, context=None, return_scalar=False):
-            if self.shape != out_arr.shape:
-                # if not same shape: drop metadata
-                return out_arr
-            # else wrap out_array
-            return super().__array_wrap__(out_arr, context, return_scalar)
+    def __reduce__(self):
+        """prevent pickling"""
+        raise NotImplementedError("Cannot pickle DicomVolume object")
+
+    def __array_wrap__(self, out_arr, context=None, return_scalar=False):
+        if self.shape != out_arr.shape:
+            # if not same shape: drop metadata
+            return out_arr
+        # else wrap out_array
+        return super().__array_wrap__(out_arr, context, return_scalar)
 
 
 def get_geometry(data):
@@ -254,7 +241,6 @@ def get_spatial_slices(key, ndim):
     return key[:3]
 
 
-@available
 def format_pixels(data, dtype="uint8"):
     """return DICOM tags and pixel bytes of a single image
 

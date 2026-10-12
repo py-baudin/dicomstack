@@ -39,6 +39,9 @@ def cli_view(subparser):
     parser = subparser.add_parser("elements", help=help, description=help)
     parser.add_argument("src", help="Source file or directory")
     parser.add_argument(
+        "--cache", action="store_true", help="Use (and update) the header cache file."
+    )
+    parser.add_argument(
         "-i",
         dest="index",
         type=int,
@@ -52,7 +55,7 @@ def cli_view(subparser):
 
     def _elements(args):
         # load stack
-        stack = dicomstack.DicomStack(args.src)
+        stack = dicomstack.DicomStack(args.src, cache=args.cache or None)
 
         if args.series:
             # filter by series
@@ -79,6 +82,9 @@ def cli_values(subparser):
         description=help,
     )
     parser.add_argument("src", help="Source file or directory")
+    parser.add_argument(
+        "--cache", action="store_true", help="Use (and update) the header cache file."
+    )
     parser.add_argument("elements", nargs="+", help="DICOM elements.")
     parser.add_argument("--series", type=int, help="Filter by series number.")
     parser.add_argument(
@@ -87,7 +93,7 @@ def cli_values(subparser):
 
     def _values(args):
         # load stack
-        stack = dicomstack.DicomStack(args.src)
+        stack = dicomstack.DicomStack(args.src, cache=args.cache or None)
 
         if args.series:
             # filter by series
@@ -112,10 +118,13 @@ def cli_list(subparser):
         description=help,
     )
     parser.add_argument("src", help="Source file or directory")
+    parser.add_argument(
+        "--cache", action="store_true", help="Use (and update) the header cache file."
+    )
 
     def _list(args):
         # load stack
-        stack = dicomstack.DicomStack(args.src)
+        stack = dicomstack.DicomStack(args.src, cache=args.cache or None)
 
         # show description
         print(stack.describe())

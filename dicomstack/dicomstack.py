@@ -9,15 +9,17 @@ import datetime
 import itertools
 import functools
 import hashlib
+import collections
+import concurrent.futures
 from io import BytesIO, StringIO
-from collections import OrderedDict
 import zipfile
 import logging
 import warnings
+import numpy as np
 import pydicom
 from pydicom import config
 
-from . import pixeldata
+from . import pixeldata, cache
 from .query import Selector, Query
 
 LOGGER = logging.getLogger(__name__)
@@ -41,7 +43,16 @@ class NoValueError(ValueError):
 class DicomStack(object):
     """load, sort and filter DICOM images"""
 
-    def __init__(self, path=None, filenames=None, *, duplicates="remove", dedup="uid"):
+    def __init__(
+        self,
+        path=None,
+        filenames=None,
+        *,
+        duplicates="remove",
+        dedup="uid",
+        workers=None,
+        cache=None,
+    ):
         """path can be:
         * a directory (or a list of),
         * a file (or a list of)
@@ -50,11 +61,17 @@ class DicomStack(object):
         duplicates: 'remove', 'error', 'ignore'
         dedup: how duplicated frames are detected
             'uid': same SOPInstanceUID and frame index (files without UID are never merged)
-            'content': same file contents and frame index (reads whole files when loading)
+            'content': same file contents and frame index
+        workers: number of threads reading the files ahead (headers are parsed in the
+            main thread). Useful on slow (e.g. network) storage only.
+        cache: header cache file, to skip parsing unchanged files on later loads
+            None/False: no cache; True: default location (`.dicomstack-cache.json.gz`
+            in the data folder, or the user cache directory if not writable);
+            "refresh": rebuild the cache at the default location; or a path
         """
-        if not dedup in DEDUP_MODES:
-            raise ValueError(f"Invalid dedup mode: {dedup} (options: {DEDUP_MODES})")
-        self._dedup = dedup
+        self._dedup = check_dedup(dedup)
+        self._workers = workers
+        self._cache = cache
 
         self.frames = []
         self.non_dicom = []
@@ -83,7 +100,7 @@ class DicomStack(object):
     @classmethod
     def from_frames(cls, frames, root=None):
         """create a new stack from list of frames"""
-        LOGGER.debug("New DICOM stack (from %s frames)" % len(frames))
+        LOGGER.debug("New DICOM stack (from %s frames)", len(frames))
         if not all([isinstance(frame, DicomFrame) for frame in frames]):
             raise TypeError("Invalid DicomFrame in %s" % frames)
         stack = cls.__new__(cls)
@@ -299,7 +316,10 @@ class DicomStack(object):
 
         diff = len(self) - len(frames)
         if warn and diff > 0:
-            warnings.warn(f"Removed {diff} duplicated frames.")
+            warnings.warn(
+                f"Removed {diff} duplicated frames.",
+                stacklevel=pixeldata.external_stacklevel(),
+            )
 
         if inplace:
             self.frames = frames
@@ -350,32 +370,68 @@ class DicomStack(object):
         except KeyError:
             return False
 
-    @pixeldata.available
-    def as_volume(self, by=None, rescale=True, reorder=True, tol=1e-3, strict=False):
+    def iter_pixels(self, workers=None):
+        """iterate the frames' pixel arrays
+
+        workers: number of threads reading the files ahead (I/O only; useful on slow storage)
+        """
+        if not workers:
+            for frame in self.frames:
+                yield frame.pixels
+            return
+
+        # threads read the files' bytes (I/O), the main thread decodes the pixels;
+        # each file once, in order of first appearance
+        # (by object: duplicated files have the same identity)
+        files = list({id(frame.dicomfile): frame.dicomfile for frame in self.frames}.values())
+        files = [dicomfile for dicomfile in files if dicomfile._pixels is None]
+        for dicomfile in files:
+            dicomfile.dataset  # headers: read in the main thread
+        contents = prefetch(lambda dicomfile: dicomfile._read_pixel_bytes(), files, workers)
+        pending = {id(dicomfile) for dicomfile in files}
+        for frame in self.frames:
+            while id(frame.dicomfile) in pending:
+                dicomfile = files[len(files) - len(pending)]
+                dicomfile._pixels = dicomfile._decode_pixels(next(contents))
+                pending.remove(id(dicomfile))
+            yield frame.pixels
+
+    def as_volume(
+        self,
+        by=None,
+        rescale=True,
+        reorder=True,
+        tol=1e-3,
+        strict=False,
+        dtype=None,
+        workers=None,
+    ):
         """as volume
 
         tol: relative tolerance on the uniformity of the slice spacing
         strict: if True, raise ValueError on non-uniform slice spacing (else warn)
+        dtype: data type of the volume (default: float64)
+        workers: number of threads reading the pixels (I/O only; useful on slow storage)
         """
-        LOGGER.debug("Make volume (use fields: %s)" % str(by))
+        LOGGER.debug("Make volume (use fields: %s)", by)
 
         if len(self) == 0:
             return None
 
-        # else continue
-        # stack = self.remove_duplicates()
-
-        if not by:
-            # single volume
-            stack = self.remove_duplicates(keys=["ImagePositionPatient"], warn=True)
-
+        def make_volume(stack):
+            stack = stack.remove_duplicates(keys=["ImagePositionPatient"], warn=True)
             if reorder:
                 # sort by location
                 stack = stack.reorder()
-            # single non-indexed volume
+            for _ in stack.iter_pixels(workers=workers):
+                pass
             return pixeldata.make_volume(
-                stack.frames, rescale=rescale, tol=tol, strict=strict
+                stack.frames, rescale=rescale, tol=tol, strict=strict, dtype=dtype
             )
+
+        if not by:
+            # single non-indexed volume
+            return make_volume(self)
 
         # else: indexed volumes
 
@@ -397,22 +453,7 @@ class DicomStack(object):
             ]
 
         # create volumes
-        volumes = []
-        for filter in filters:
-            # substack = stack.filter_by_field(**filter)
-            substack = self.filter_by_field(**filter)
-            substack = substack.remove_duplicates(
-                keys=["ImagePositionPatient"], warn=True
-            )
-
-            if reorder:
-                # sort by location
-                substack = substack.reorder()
-
-            volume = pixeldata.make_volume(
-                substack.frames, rescale=rescale, tol=tol, strict=strict
-            )
-            volumes.append(volume)
+        volumes = [make_volume(self.filter_by_field(**filter)) for filter in filters]
         return indices, volumes
 
     def _existing(self, fields):
@@ -460,14 +501,28 @@ class DicomStack(object):
 
     def _load_files(self, filenames, duplicates):
         """load filenames"""
+        # header cache
+        cache_paths = cache.locations(self.root, self._cache) if self._cache else []
+        if self._cache and not cache_paths:
+            LOGGER.info("No default cache location without a root folder: use cache=<path>")
+        reuse = cache_paths and self._cache != "refresh"
+        self._cache_old = cache.load(cache_paths, self._dedup) if reuse else {}
+        self._cache_new = {} if cache_paths else None
+        self._cache_changed = False
+        skip = {os.path.abspath(path) for path in cache_paths}
+
         # group zip members by archive (each archive is opened once)
         items = []  # filename, or zip path
         archives = {}  # zip path: (first filename, [selected members])
         for filename in filenames:
-            # skip DICOMDIR
+            # skip DICOMDIR and cache files
             if str(filename).endswith("DICOMDIR"):
                 continue
+            elif os.path.basename(str(filename)) == cache.CACHE_NAME:
+                continue
             filepath = self._filepath(filename)
+            if os.path.abspath(filepath) in skip:
+                continue
             zip_path = get_zip_path(filepath)
             if not zip_path:
                 items.append(filename)
@@ -478,11 +533,32 @@ class DicomStack(object):
             member = filepath[len(zip_path) :].replace("\\", "/").strip("/")
             archives[zip_path][1].append(member)
 
+        # regular files: from the cache, or read (optionally ahead, in threads)
+        files = [item for item in items if not item in archives]
+        cached = {}
+        if self._cache_new is not None:
+            for filename in files:
+                entry = self._cache_entry(self._cache_key(filename), self._file_stat(filename))
+                if entry is not None:
+                    cached[filename] = entry
+        to_read = [filename for filename in files if not filename in cached]
+        if self._workers:
+            contents = prefetch(read_file, map(self._filepath, to_read), self._workers, errors=True)
+        else:
+            contents = itertools.repeat(None)
+
         for item in items:
             if item in archives:
                 self._load_zipfile(item, *archives[item])
+            elif item in cached:
+                self._load_cached(item, self._filepath(item), cached[item])
             else:
-                self._load_file(item)
+                self._load_file(item, next(contents))
+
+        if self._cache_new is not None:
+            if self._cache_changed or set(self._cache_new) != set(self._cache_old):
+                cache.save(cache_paths, self._dedup, self._cache_new)
+        del self._cache_old, self._cache_new, self._cache_changed
 
         # duplicates
         unique_frames = set(self.frames)
@@ -508,19 +584,67 @@ class DicomStack(object):
             return os.path.join(self.root, filename)
         return str(filename)
 
-    def _load_file(self, filename):
-        """load single Dicom file"""
+    # header cache
+
+    def _cache_key(self, filename):
+        """cache key of a file: path relative to root (absolute without root)"""
+        path = os.path.relpath(self._filepath(filename), self.root) if self.root else filename
+        path = path if self.root else os.path.abspath(str(path))
+        return str(path).replace("\\", "/")
+
+    def _file_stat(self, filename):
+        try:
+            return cache.file_stat(self._filepath(filename))
+        except OSError:
+            return None
+
+    def _cache_entry(self, key, stat):
+        """valid cache entry for key (and keep it in the new cache), or None"""
+        entry = self._cache_old.get(key)
+        if stat is None or entry is None or entry.get("stat") != stat:
+            return None
+        self._cache_new[key] = entry
+        return entry
+
+    def _cache_add(self, key, stat, dicomfile=None):
+        """add a new entry (dicomfile: None for non-DICOM files)"""
+        if self._cache_new is None or stat is None:
+            return
+        if dicomfile is None:
+            self._cache_new[key] = {"stat": stat, "non_dicom": True}
+        else:
+            self._cache_new[key] = dicomfile.cache_entry(stat)
+        self._cache_changed = True
+
+    def _load_cached(self, filename, filepath, entry, source=None):
+        """load a file from its cache entry"""
+        if entry.get("non_dicom"):
+            self.non_dicom.append(filename)
+            return
+        dicomfile = DicomFile.from_cache(filepath, entry, source=source, dedup=self._dedup)
+        self.frames.extend(dicomfile.frames)
+
+    def _load_file(self, filename, data=None):
+        """load single Dicom file
+
+        data: contents of the file if already read (or the exception raised when reading it)
+        """
         filepath = self._filepath(filename)
 
+        stat = self._file_stat(filename) if self._cache_new is not None else None
         try:
+            if isinstance(data, Exception):
+                raise data
             # read dicom object
-            dicomfile = DicomFile(filepath, dedup=self._dedup)
+            dicomfile = DicomFile(filepath, bytes=data, dedup=self._dedup)
             frames = dicomfile.frames
         except (IOError, InvalidDicomError):
             # other files
             self.non_dicom.append(filename)
+            self._cache_add(self._cache_key(filename), stat)
         else:
             self.frames.extend(frames)
+            self._cache_add(self._cache_key(filename), stat, dicomfile)
 
     def _load_zipfile(self, zip_path, filename, members):
         """load files in zipfile
@@ -539,6 +663,15 @@ class DicomStack(object):
                 for sel in members
             )
 
+        if self._cache_new is not None:
+            # cache: valid while the archive and the member's CRC are unchanged
+            prefix = os.path.relpath(zip_path, self.root) if self.root else os.path.abspath(zip_path)
+            prefix = prefix.replace("\\", "/")
+            try:
+                archive_stat = cache.file_stat(zip_path)
+            except OSError:
+                archive_stat = None
+
         with zipfile.ZipFile(zip_path, "r") as zf:
             for zfile in zf.filelist:
 
@@ -552,21 +685,33 @@ class DicomStack(object):
                     continue
                 zfilename = os.path.normpath(zfile.filename)
                 full_zfilename = os.path.join(zip_path, zfilename)
+                source = (zip_path, zfile.filename)
+
+                key = stat = None
+                if self._cache_new is not None and archive_stat is not None:
+                    key = f"{prefix}:{zfile.filename}"
+                    stat = archive_stat + [zfile.CRC]
+                    entry = self._cache_entry(key, stat)
+                    if entry is not None:
+                        self._load_cached(full_zfilename, full_zfilename, entry, source=source)
+                        continue
 
                 try:
                     # read dicom object
                     dicomfile = DicomFile(
                         full_zfilename,
                         bytes=zf.read(zfile),
-                        source=(zip_path, zfile.filename),
+                        source=source,
                         dedup=self._dedup,
                     )
                     frames = dicomfile.frames
                 except (IOError, InvalidDicomError):
                     # other files
                     self.non_dicom.append(full_zfilename)
+                    self._cache_add(key, stat)
                 else:
                     self.frames.extend(frames)
+                    self._cache_add(key, stat, dicomfile)
 
 
 def describe(dicomtree, regex=None):
@@ -628,21 +773,49 @@ class DicomFile:
     _frames = None
     _identity = None
     _lookup = None
+    _cache = None  # cache entry (header cache)
 
     def __init__(self, filename, bytes=None, *, source=None, dedup="uid"):
         """init DicomFile object (the header is read on demand)
 
         bytes: contents of the file (e.g. zip member), read now but not kept
         """
-        if not dedup in DEDUP_MODES:
-            raise ValueError(f"Invalid dedup mode: {dedup} (options: {DEDUP_MODES})")
         self.filename = filename
         self.source = str(filename) if source is None else source
-        self.dedup = dedup
+        self.dedup = check_dedup(dedup)
         self.digest = None
         self.pixel_offset = None
         if bytes is not None:
             self._read_header(bytes)
+
+    @classmethod
+    def from_cache(cls, filename, entry, *, source=None, dedup="uid"):
+        """DicomFile from a header cache entry (the header is read on demand)"""
+        dicomfile = cls(filename, source=source, dedup=dedup)
+        dicomfile._cache = entry
+        dicomfile._identity = entry["identity"]
+        dicomfile.pixel_offset = entry["offset"]
+        return dicomfile
+
+    def cache_entry(self, stat):
+        """header cache entry: converted values of all frames"""
+        if self._lookup is None:
+            self._lookup = FileLookup(self.dataset)
+        nframe = self.nframe
+        indices = [None] if nframe is None else range(nframe)
+        return {
+            "stat": stat,
+            "offset": self.pixel_offset,
+            "nframe": nframe,
+            "identity": self.identity,
+            "frames": [cache.frame_values(self._lookup, index) for index in indices],
+        }
+
+    def cached_frame(self, index):
+        """cached values of frame `index`, or None"""
+        if self._cache is None:
+            return None
+        return self._cache["frames"][index or 0]
 
     @property
     def identity(self):
@@ -697,13 +870,15 @@ class DicomFile:
     @property
     def nframe(self):
         """number of frames in multi-frame DICOM"""
+        if self._dataset is None and self._cache is not None:
+            return self._cache["nframe"]
         return get_nframe(self.dataset)
 
     @property
     def frames(self):
         """return list of frames"""
         if self._frames is None:
-            nframe = get_nframe(self.dataset)
+            nframe = self.nframe
             if nframe is None:
                 self._frames = [DicomFrame(self)]
             else:
@@ -714,9 +889,46 @@ class DicomFile:
     def pixels(self):
         """retrieve pixel data"""
         if self._pixels is None:
-            dataset, _ = self._read(stop_before_pixels=False)
-            self._pixels = dataset.pixel_array
+            self._pixels = self._read_pixels()
         return self._pixels
+
+    def _read_pixels(self):
+        """read pixel array, using the stored header"""
+        return self._decode_pixels(self._read_pixel_bytes())
+
+    def _read_pixel_bytes(self):
+        """bytes needed to decode the pixels: the file from the pixel data element on,
+        or the whole file if its position is unknown (I/O only: can run in a thread)
+        """
+        self.dataset  # make sure the header is read
+        if self.pixel_offset is None:
+            return self._read_bytes()
+        with open(self.source, "rb") as fp:
+            fp.seek(self.pixel_offset)
+            return fp.read()
+
+    def _decode_pixels(self, data):
+        """pixel array from the bytes returned by _read_pixel_bytes"""
+        header = self.dataset
+        if self.pixel_offset is None:
+            # zip member, or unknown offset: parse the whole file
+            dataset, _ = read_dataset(data, stop_before_pixels=False)
+            return dataset.pixel_array
+
+        syntax = header.file_meta.TransferSyntaxUID
+        if syntax in NATIVE_SYNTAXES:
+            pixels = read_native_pixels(BytesIO(data), header, implicit=syntax.is_implicit_VR)
+            if pixels is not None:
+                return pixels
+        # other syntaxes: read the pixel data element only, decode with pydicom
+        elements = pydicom.filereader.read_dataset(
+            BytesIO(data), syntax.is_implicit_VR, syntax.is_little_endian
+        )
+        dataset = pydicom.Dataset()
+        dataset.update(header)
+        dataset.update(elements)
+        dataset.file_meta = header.file_meta
+        return dataset.pixel_array
 
     def get_element(self, key, index=None):
         """pydicom element of frame `index` for key (keyword, "[Name]" or tag)
@@ -883,11 +1095,16 @@ class DicomFrame:
         except (KeyError, TypeError):  # TypeError: unhashable keys
             pass
 
-        # only the requested element is converted
-        node = self.dicomfile.get_element(keys[0], self.index)
-        for key in keys[1:]:
-            node = get_subitem(node, key)
-        value = get_leaf(node)
+        value = cache.NOT_CACHED
+        cached = self.dicomfile.cached_frame(self.index)
+        if cached is not None:
+            value = get_cached_value(cached, keys)
+        if value is cache.NOT_CACHED:
+            # only the requested element is converted
+            node = self.dicomfile.get_element(keys[0], self.index)
+            for key in keys[1:]:
+                node = get_subitem(node, key)
+            value = get_leaf(node)
 
         try:
             self._values[keys] = value
@@ -1073,6 +1290,8 @@ SHARED_GROUPS = 0x52009229  # SharedFunctionalGroupsSequence
 PER_FRAME_GROUPS = 0x52009230  # PerFrameFunctionalGroupsSequence
 PIXEL_DATA = 0x7FE00010
 SOP_INSTANCE_UID = 0x00080018
+ROWS, COLUMNS, BITS_ALLOCATED = 0x00280010, 0x00280011, 0x00280100
+NATIVE_SYNTAXES = {pydicom.uid.ImplicitVRLittleEndian, pydicom.uid.ExplicitVRLittleEndian}
 SEQUENCE_DELIMITER = b"\xfe\xff\xdd\xe0"
 
 
@@ -1093,7 +1312,92 @@ def read_dataset(data, stop_before_pixels=True):
             offset = None
     # pydicom keeps a reference to the buffer
     dataset.buffer = None
+    meta = getattr(dataset, "file_meta", None)
+    if meta is None or meta.get("TransferSyntaxUID") == pydicom.uid.DeflatedExplicitVRLittleEndian:
+        # the offset is not a position in the file
+        offset = None
     return dataset, offset
+
+
+def check_dedup(dedup):
+    if not dedup in DEDUP_MODES:
+        raise ValueError(f"Invalid dedup mode: {dedup} (options: {DEDUP_MODES})")
+    return dedup
+
+
+def read_file(path):
+    with open(path, "rb") as fp:
+        return fp.read()
+
+
+def prefetch(func, items, workers, window=None, errors=False):
+    """yield func(item) for each item, computed ahead in a thread pool
+
+    window: maximum number of items computed ahead (default: 4 x workers)
+    errors: yield exceptions raised by func instead of raising them
+    """
+    window = window or 4 * workers
+    items = iter(items)
+    with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+        pending = collections.deque(pool.submit(func, item) for item in itertools.islice(items, window))
+        while pending:
+            future = pending.popleft()
+            for item in itertools.islice(items, 1):
+                pending.append(pool.submit(func, item))
+            try:
+                yield future.result()
+            except Exception as exc:
+                if not errors:
+                    raise
+                yield exc
+
+
+def read_native_pixels(fp, header, implicit):
+    """read native (uncompressed, little endian) pixel data at the current position of fp
+
+    returns the same array as pydicom's pixel_array, or None if not supported
+    (several samples per pixel, unusual bit depths, unexpected element)
+    """
+    rows, columns = header.get(ROWS), header.get(COLUMNS)
+    bits = header.get(BITS_ALLOCATED)
+    if rows is None or columns is None or bits is None or bits.value not in (8, 16, 32):
+        return None
+    rows, columns, bits = rows.value, columns.value, bits.value
+    samples = header.SamplesPerPixel if "SamplesPerPixel" in header else 1
+    stored = header.BitsStored if "BitsStored" in header else bits
+    high_bit = header.HighBit if "HighBit" in header else stored - 1
+    signed = header.PixelRepresentation == 1 if "PixelRepresentation" in header else False
+    nframe = int(header.NumberOfFrames or 1) if "NumberOfFrames" in header else 1
+    if samples != 1 or not stored or stored > bits or high_bit != stored - 1:
+        return None
+
+    # pixel data element: tag, (explicit VR: VR, reserved), length
+    if fp.read(4) != b"\xe0\x7f\x10\x00":
+        return None
+    if implicit:
+        length = int.from_bytes(fp.read(4), "little")
+    elif fp.read(4)[:2] in (b"OB", b"OW"):
+        length = int.from_bytes(fp.read(4), "little")
+    else:
+        return None
+    dtype = np.dtype(f"<{'i' if signed else 'u'}{bits // 8}")
+    size = rows * columns * nframe * dtype.itemsize
+    if length == 0xFFFFFFFF or length < size:
+        return None
+    buffer = bytearray(size)
+    if fp.readinto(buffer) != size:
+        return None
+    pixels = np.frombuffer(buffer, dtype=dtype)
+
+    if stored < bits:
+        # as pydicom: mask unused high bits, or extend the sign
+        if signed:
+            shift = bits - stored
+            pixels = (pixels << shift) >> shift
+        else:
+            pixels &= (1 << stored) - 1
+    shape = (nframe, rows, columns) if nframe > 1 else (rows, columns)
+    return pixels.reshape(shape)
 
 
 def element_keyword(element):
@@ -1218,17 +1522,69 @@ class FileLookup:
             raise KeyError(key)
         return element
 
-    def _groups(self, index):
-        """flattened functional groups for frame `index`: per-frame, shared"""
+    def _flattened_groups(self):
+        """flattened functional groups (lists of elements): shared, per-frame"""
         if self._shared is None:
             header = self.header
             shared = header[SHARED_GROUPS].value if SHARED_GROUPS in header else []
             per_frame = header[PER_FRAME_GROUPS].value if PER_FRAME_GROUPS in header else []
-            self._shared = index_elements(itertools.chain(*map(flatten_elements, shared)))
-            self._per_frame = [index_elements(flatten_elements(item)) for item in per_frame]
+            self._shared = list(itertools.chain(*map(flatten_elements, shared)))
+            self._per_frame = [list(flatten_elements(item)) for item in per_frame]
+            self._shared_index = index_elements(self._shared)
+            self._per_frame_index = [index_elements(items) for items in self._per_frame]
+        return self._shared, self._per_frame
+
+    def _groups(self, index):
+        """indexed functional groups for frame `index`: per-frame, shared"""
+        self._flattened_groups()
         if index is None or not self._per_frame:
-            return [self._shared]
-        return [self._per_frame[index], self._shared]
+            return [self._shared_index]
+        return [self._per_frame_index[index], self._shared_index]
+
+    def frame_elements(self, index=None):
+        """all elements of frame `index`: {tag (int): element}, {keyword: tag}
+
+        Same precedence as `get` (and as DicomDataset.from_dataset(header, index)):
+        file meta, then top-level elements in tag order with the functional groups
+        flattened in place, the last occurrence winning.
+        Top-level public elements are returned unconverted (pydicom RawDataElement)
+        when not converted yet.
+        """
+        by_tag, by_keyword = {}, {}
+
+        def add(element, keyword=None):
+            tag = int(element.tag)
+            by_tag[tag] = element
+            keyword = element_keyword(element) if keyword is None else keyword
+            if keyword:
+                by_keyword[keyword] = tag
+
+        meta = self.top.meta
+        for tag in sorted(meta.keys()) if meta is not None else []:
+            add(meta[tag])
+        if self.multiframe:
+            shared, per_frame = self._flattened_groups()
+        for tag in sorted(self.header.keys()):
+            if tag == PIXEL_DATA:
+                continue
+            elif self.multiframe and tag == SHARED_GROUPS:
+                for element in shared:
+                    add(element)
+            elif self.multiframe and tag == PER_FRAME_GROUPS:
+                for element in per_frame[index] if index is not None and per_frame else []:
+                    add(element)
+            elif tag.is_private:
+                # the automatic keyword needs the converted element's name
+                add(self.header[tag])
+            else:
+                # as DataElement.keyword: dictionary keyword, "" for repeating groups
+                keyword = (
+                    pydicom.datadict.dictionary_keyword(tag)
+                    if pydicom.datadict.dictionary_has_tag(tag)
+                    else ""
+                )
+                add(self.header.get_item(tag), keyword)
+        return by_tag, by_keyword
 
 
 def flatten_elements(dataset):
@@ -1264,6 +1620,32 @@ def get_subitem(node, key):
     elif isinstance(node, DatasetLookup):
         return node.find(key)
     return node[key]
+
+
+def get_cached_value(cached, keys):
+    """value from the cached values of a frame, or cache.NOT_CACHED
+
+    raises KeyError for missing elements (the cache lists all elements)
+    """
+    key = keys[0]
+    if DicomTag.is_tag(key):
+        tag = DicomTag(*key)
+        tag_key = f"{tag.group:04x},{tag.element:04x}"
+    elif isinstance(key, str):
+        tag_key = cached["k"].get(key)
+        if tag_key is None:
+            raise KeyError(key)
+    else:
+        raise TypeError(f"Invalid key type: {key}")
+    if not tag_key in cached["v"]:
+        raise KeyError(key)
+    value = cached["v"][tag_key]
+    if value is cache.NOT_CACHED:
+        return value
+    for key in keys[1:]:
+        # as get_subitem for non-sequence elements
+        value = value[key]
+    return value
 
 
 def get_leaf(node):
