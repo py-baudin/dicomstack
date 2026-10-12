@@ -161,6 +161,7 @@ cython_debug/
 
 # vscode
 .vscode
+.claude
 
 # plan
 PLAN.md
@@ -170,3 +171,5 @@ benchmarks/data/
 
 # golden data
 test/golden/
+
+
