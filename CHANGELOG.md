@@ -2,8 +2,26 @@
 
 ## Unreleased
 
+### Added
+- Added: `MultipleValuesError` and `NoValueError` raised by `single()`.
+- Added: `isin()` alias of `is_in()` on selectors.
+- Added: `as_volume(tol=, strict=)` to check slice spacing uniformity.
+
 ### Changed
 - Changed: requires Python >= 3.10 and pydicom >= 2.4, < 4.
+- Changed: `as_volume` warns on missing or irregular slices.
+- Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
+- Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.
+- Changed: `format_pixels` uses the geometry of `DicomVolume` slices.
 
 ### Fixed
 - Fixed: `utils.write_dataset` failed with pydicom 2.x.
+- Fixed: `sort()` ignored every field after the first.
+- Fixed: studies sharing a StudyID were lost in `dicomtree` and `describe()`.
+- Fixed: non-numeric StudyID or empty SeriesNumber crashed `describe()`.
+- Fixed: zip members selected by substring (`a.zip/IM1` loaded `IM10`).
+- Fixed: `.ZIP` files were not read; each archive is now opened once.
+- Fixed: a non-zip file named `*.zip` crashed loading.
+- Fixed: importing dicomstack replaced `warnings.showwarning` globally.
+- Fixed: in-plane volume spacings were swapped for non-square pixels.
+- Fixed: `write_dataset` files lacked SOP UIDs and had invalid orientation.
