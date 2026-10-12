@@ -167,3 +167,6 @@ PLAN.md
 
 # benchmark data
 benchmarks/data/
+
+# golden data
+test/golden/
