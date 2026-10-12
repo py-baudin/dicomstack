@@ -2,6 +2,7 @@
 
 # coding=utf-8
 import math
+import warnings
 
 try:
     import numpy as np
@@ -29,8 +30,12 @@ def available(func):
 
 
 @available
-def make_volume(frames, rescale=True):
-    """return volume from a sequence of frames"""
+def make_volume(frames, rescale=True, tol=1e-3, strict=False):
+    """return volume from a sequence of frames
+
+    tol: relative tolerance on the uniformity of the slice spacing
+    strict: if True, raise ValueError on non-uniform slice spacing (else warn)
+    """
 
     # find geometry
     nframe = len(frames)
@@ -53,8 +58,11 @@ def make_volume(frames, rescale=True):
     else:
         ax3 = tuple(value / norm3 for value in vec3)
         spacing3 = norm3 / (nframe - 1)
+        check_slice_spacing(frames, origin, ax3, spacing3, tol=tol, strict=strict)
     transform = (ax1, ax2, ax3)
-    spacing = first["PixelSpacing"] + (spacing3,)
+    # PixelSpacing: (row spacing, column spacing); axis 0 runs along a row
+    row_spacing, col_spacing = first["PixelSpacing"]
+    spacing = (col_spacing, row_spacing, spacing3)
 
     metadata = {
         # (0,0,0) pixel location in mm
@@ -76,6 +84,26 @@ def make_volume(frames, rescale=True):
             pixels = pixels * slope + intercept
         slices.append(pixels)
     return DicomVolume(slices, **metadata).T
+
+
+def check_slice_spacing(frames, origin, ax3, spacing3, tol=1e-3, strict=False):
+    """check slice positions along ax3 are uniformly spaced by spacing3"""
+    positions = [
+        sum((b - a) * n for a, b, n in zip(origin, frame["ImagePositionPatient"], ax3))
+        for frame in frames
+    ]
+    steps = [b - a for a, b in zip(positions[:-1], positions[1:])]
+    error = max(abs(step - spacing3) for step in steps)
+    if error <= tol * spacing3:
+        return
+    msg = (
+        f"Non-uniform slice spacing (from {min(steps):g} to {max(steps):g}, "
+        f"volume spacing: {spacing3:g}): missing or irregular slices?"
+    )
+    if strict:
+        raise ValueError(msg)
+    # caller of DicomStack.as_volume (both functions are wrapped by `available`)
+    warnings.warn(msg, stacklevel=6)
 
 
 if AVAILABLE:
@@ -130,6 +158,8 @@ if AVAILABLE:
 def format_pixels(data, dtype="uint8"):
     """make metadata from ndarray"""
     tags = {}
+    # volume geometry (read before np.asarray, which drops the DicomVolume class)
+    volumetags = getattr(data, "tags", {})
     data = np.asarray(data)
 
     if data.ndim != 2:
@@ -141,11 +171,11 @@ def format_pixels(data, dtype="uint8"):
     tags["Columns"] = cols
 
     # geometry
-    volumetags = getattr(data, "tags", {})
     origin = volumetags.get("origin", (0, 0, 0))
     spacing = volumetags.get("spacing", (1, 1, 1))
     transform = volumetags.get("transform", [(1, 0, 0), (0, 1, 0), (0, 0, 1)])
-    tags["PixelSpacing"] = list(spacing[:2])
+    # data: (rows, columns), spacing: (column spacing, row spacing, ...) as in volumes
+    tags["PixelSpacing"] = [spacing[1], spacing[0]]
     tags["ImagePositionPatient"] = list(origin)
     tags["ImageOrientationPatient"] = list(transform[0]) + list(transform[1])
 
