@@ -12,7 +12,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.13"]
-        pydicom: ["pydicom==2.4.*", "pydicom>=3,<4"]
+        pydicom: ["pydicom==3.0.*", "pydicom>=3,<4"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

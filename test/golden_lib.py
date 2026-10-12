@@ -22,7 +22,6 @@ import pydicom
 
 from dicomstack import DicomStack, DICOM
 from dicomstack.dicomstack import DicomDataset
-from dicomstack.utils import save_as
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GOLDEN_DIR = os.path.join(HERE, "golden")
@@ -107,7 +106,8 @@ def make_generated(dest, nseries=2, nechoes=2, nslices=5):
                     ds.PixelData = (pixels + index).astype(pixels.dtype).tobytes()
                 folder = os.path.join(dest, f"s{series + 1}")
                 os.makedirs(folder, exist_ok=True)
-                save_as(ds, os.path.join(folder, f"IM{echo + 1}_{slice + 1}.dcm"), True)
+                filename = os.path.join(folder, f"IM{echo + 1}_{slice + 1}.dcm")
+                ds.save_as(filename, enforce_file_format=True)
 
     with open(os.path.join(dest, "notes.txt"), "w") as fp:
         fp.write("not a DICOM file")

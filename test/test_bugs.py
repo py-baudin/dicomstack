@@ -37,7 +37,7 @@ def make(src):
         for k, v in kw.items():
             setattr(ds, k, v)
         os.makedirs(os.path.dirname(str(path)), exist_ok=True)
-        utils.save_as(ds, str(path), enforce_file_format=True)
+        ds.save_as(str(path), enforce_file_format=True)
         return ds
 
     return make

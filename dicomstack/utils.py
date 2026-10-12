@@ -65,16 +65,6 @@ class MappingTableError(Exception):
 # uid generator
 generate_uid = pydicom.uid.generate_uid
 
-PYDICOM_MAJOR = int(pydicom.__version__.split(".")[0])
-
-
-def save_as(dataset, filename, enforce_file_format=False):
-    """Dataset.save_as for pydicom 2.x and 3.x"""
-    if PYDICOM_MAJOR >= 3:
-        dataset.save_as(filename, enforce_file_format=enforce_file_format)
-    else:
-        dataset.save_as(filename, write_like_original=not enforce_file_format)
-
 
 def tame_field(name):
     """tame DICOM field"""
@@ -284,10 +274,6 @@ def write_dataset(
     dataset = pydicom.FileDataset(
         filename, dataset, file_meta=file_meta, preamble=b"\0" * 128
     )
-    if PYDICOM_MAJOR < 3:
-        # encoding set from the transfer syntax in pydicom 3
-        dataset.is_little_endian = True
-        dataset.is_implicit_VR = False
 
     # write dataset
     LOGGER.debug("Writing file: %s", filename)
@@ -295,7 +281,7 @@ def write_dataset(
         LOGGER.debug("Setting file extension to: %s", ext)
         basename = os.path.splitext(filename)[0]
         filename = basename + ext
-    save_as(dataset, filename, enforce_file_format=True)
+    dataset.save_as(filename, enforce_file_format=True)
 
 
 GEOMETRY_TAGS = ["PixelSpacing", "ImagePositionPatient", "ImageOrientationPatient"]

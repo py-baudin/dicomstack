@@ -17,8 +17,6 @@ import zipfile
 import pydicom
 from pydicom.uid import generate_uid
 
-from dicomstack.utils import save_as
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_DIR = os.path.join(os.path.dirname(HERE), "test")
 
@@ -47,7 +45,7 @@ def make_stack(dest):
                 ds.SOPInstanceUID = generate_uid()
                 ds.file_meta.MediaStorageSOPInstanceUID = ds.SOPInstanceUID
                 filename = os.path.join(folder, f"IM{echo + 1}_{slice + 1}.dcm")
-                save_as(ds, filename, enforce_file_format=True)
+                ds.save_as(filename, enforce_file_format=True)
         print(f"series {series + 1}/{NSERIES}")
 
 

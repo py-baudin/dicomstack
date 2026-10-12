@@ -8,7 +8,7 @@
 - Added: `as_volume(tol=, strict=)` to check slice spacing uniformity.
 
 ### Changed
-- Changed: requires Python >= 3.10 and pydicom >= 2.4, < 4.
+- Changed: requires Python >= 3.10 and pydicom >= 3, < 4.
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.
@@ -19,7 +19,6 @@
 - Changed: `format_pixels` writes `(x, y[, 1])` volumes as `(rows, columns)`.
 
 ### Fixed
-- Fixed: `utils.write_dataset` failed with pydicom 2.x.
 - Fixed: `sort()` ignored every field after the first.
 - Fixed: studies sharing a StudyID were lost in `dicomtree` and `describe()`.
 - Fixed: non-numeric StudyID or empty SeriesNumber crashed `describe()`.
