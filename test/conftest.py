@@ -22,14 +22,14 @@ def brain(brainfile):
 
 @pytest.fixture()
 def legsfile():
-    """brain filename"""
+    """legs filename"""
     return os.path.join(os.path.dirname(__file__), "MRLEGS.DCM")
 
 
 @pytest.fixture()
 def legs(legsfile):
-    """load brain dataset"""
-    return pydicom.dcmread(brainfile)
+    """load legs dataset"""
+    return pydicom.dcmread(legsfile)
 
 
 @pytest.fixture()
