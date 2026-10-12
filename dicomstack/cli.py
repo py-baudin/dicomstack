@@ -59,9 +59,8 @@ def cli_view(subparser):
 
         # show dicom elements
         frame = stack.frames[args.index - 1]
-        # load elements
-        frame.dataset.elements
         print(frame)
+        print(frame.dataset)
 
     parser.set_defaults(func=_elements)
 

@@ -6,12 +6,14 @@ Each ```python block is executed in order, in a shared namespace, in a folder co
     data/notes.txt                    not DICOM
     data.zip                          series1/ and series2/ zipped
     multiframe.dcm                    enhanced (multi-frame) MR, 90 frames
-Blocks preceded by `<!-- skip-test -->` are not executed.
+Blocks preceded by `<!-- skip-test -->` are not executed, nor blocks importing tomio
+if it is not installed.
 """
 
 import os
 import re
 import copy
+import importlib.util
 import zipfile
 
 import pydicom
@@ -87,6 +89,8 @@ def test_readme(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     namespace = {}
     for line, code in blocks:
+        if "import tomio" in code and importlib.util.find_spec("tomio") is None:
+            continue  # optional
         try:
             exec(compile(code, f"README.md:{line}", "exec"), namespace)
         except Exception as exc:

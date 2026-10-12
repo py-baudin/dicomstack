@@ -80,12 +80,23 @@ def test_table(stack):
     assert set(stack.table()[0]) == set(stack.fields())
 
 
+def test_table_selectors(stack):
+    from dicomstack import DICOM
+
+    table = stack.table("EchoTime", DICOM.ImageType[2], DICOM.IconImageSequence[0].Rows, (0x0018, 0x0081))
+    assert list(table[0]) == ["EchoTime", "ImageType[2]", "IconImageSequence[0].Rows", (0x0018, 0x0081)]
+    assert table[0]["ImageType[2]"] == "M"
+    assert table[0]["IconImageSequence[0].Rows"] == 64
+
+
 def test_to_dataframe(stack):
     pandas = pytest.importorskip("pandas")
-    frame = stack.to_dataframe("SeriesNumber", "EchoTime")
+    from dicomstack import DICOM
+
+    frame = stack.to_dataframe("SeriesNumber", "EchoTime", DICOM.ImageType[2])
     assert isinstance(frame, pandas.DataFrame)
-    assert frame.shape == (12, 2)
-    assert list(frame.columns) == ["SeriesNumber", "EchoTime"]
+    assert frame.shape == (12, 3)
+    assert list(frame.columns) == ["SeriesNumber", "EchoTime", "ImageType[2]"]
 
 
 def test_repr(stack, legsfile):
@@ -94,6 +105,18 @@ def test_repr(stack, legsfile):
     assert repr(DicomStack()) == "DICOM(0 frames)"
     html = stack._repr_html_()
     assert html.startswith("<pre>DICOM(12 frames") and "n=6" in html
+
+
+def test_frame_repr(stack, multi):
+    frame = stack(SeriesNumber=2, EchoTime=20)[0]
+    text = repr(frame)
+    assert text.startswith("DicomFrame(") and "im2_0.dcm" in text
+    assert "MR" in text and "SeriesNumber=2" in text and "InstanceNumber=20" in text
+    assert frame._dataset is None  # no full conversion
+    # multi-frame: frame index
+    assert "[89]" in repr(DicomStack(multi)[-1])
+    # all elements
+    assert "(0008, 0060) Modality" in str(frame.dataset)
 
 
 #
@@ -171,16 +194,24 @@ def test_affine(stack):
 def test_as_volume_stack(stack):
     series1 = stack(SeriesNumber=1)
     indices, volumes = series1.as_volume(by="EchoTime")
-    volume = series1.as_volume(by="EchoTime", stack=True)
+    values, volume = series1.as_volume(by="EchoTime", stack=True)
+    assert values == indices == [10, 20]
     assert volume.shape == volumes[0].shape + (2,)
     assert np.array_equal(volume[..., 1], volumes[1])
     assert volume.metadata == {"EchoTime": "[10, 20]"}
     assert volume.spacing == volumes[0].spacing
 
-    volume = stack.as_volume(by=["SeriesNumber", "EchoTime"], stack=True)
+    values, volume = stack.as_volume(by=["SeriesNumber", "EchoTime"], stack=True)
+    assert values == [(1, 10), (1, 20), (2, 10), (2, 20)]
     assert volume.shape[3] == 4
     assert volume.metadata == {"SeriesNumber": "[1, 1, 2, 2]", "EchoTime": "[10, 20, 10, 20]"}
-    assert stack.as_volume(by="UnknownField", stack=True) is None
+    assert stack.as_volume(by="UnknownField", stack=True) == ([], None)
+
+    # selector fields
+    from dicomstack import DICOM
+
+    values, volume = series1.as_volume(by=[DICOM.EchoTime], stack=True)
+    assert values == [10, 20] and volume.metadata == {"EchoTime": "[10, 20]"}
 
 
 #

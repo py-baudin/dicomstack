@@ -240,17 +240,34 @@ volume.affine                                 # 4x4: voxel indices (i, j, k, 1) 
 
 Volumes are numpy arrays (`DicomVolume`) with their geometry, in LPS coordinates (as DICOM and ITK): `transform[i]` is the direction of array axis `i` and `spacing[i]` the voxel size along it. Slices are sorted by position (`reorder=False` keeps the stack's order), pixel values are rescaled with `RescaleSlope`/`RescaleIntercept` (`rescale=False` to keep the stored values), the data type is `float64` (`dtype="float32"` halves the memory). A warning is shown if the slices are not evenly spaced (missing slice), `strict=True` raises a `ValueError` instead.
 
-Slicing a volume keeps a consistent geometry (`volume[:, :, 2:3].origin` is the position of the third slice); `tomio.asvolume(volume)` converts it to a [tomio](https://github.com/py-baudin/tomio) `Volume`.
+Slicing a volume keeps a consistent geometry (`volume[:, :, 2:3].origin` is the position of the third slice). To write volumes to image files, see [With tomio](#with-tomio).
 
 ```python
 echo_times, volumes = stack(SeriesNumber=2).as_volume(by="EchoTime")
 echo_times                                    # -> [10, 20]: one volume per echo time
-volume = stack(SeriesNumber=2).as_volume(by="EchoTime", stack=True)
-volume.shape                                  # -> (256, 192, 4, 2)
+echo_times, volume = stack(SeriesNumber=2).as_volume(by="EchoTime", stack=True)
+volume.shape                                  # -> (256, 192, 4, 2): echo times on the last axis
 volume.metadata                               # -> {'EchoTime': '[10, 20]'}
 
 for pixels in stack.iter_pixels():            # frames' pixel arrays (rows, columns)
     pass
+```
+
+## With tomio
+
+Volumes have the attributes of [tomio](https://github.com/py-baudin/tomio)'s `Volume` (`spacing`, `origin`, `transform`, `metadata`): tomio writes them to image files (NIfTI, NRRD, MetaImage...) with their geometry.
+
+```python
+import tomio
+
+echo_times, volume = stack(SeriesNumber=2).as_volume(by="EchoTime", stack=True)
+tomio.write_volume("multiecho.nii.gz", volume)      # 4d NIfTI (x, y, z, echo)
+tomio.write_volume("multiecho.nrrd", volume)        # NRRD also keeps the metadata (echo times)
+
+vol = tomio.read_volume("multiecho.nrrd")
+vol.spacing                                   # -> (1.484375, 1.484375, 2.0)
+vol.metadata["EchoTime"]                      # -> '[10, 20]'
+vol = tomio.asvolume(volume)                  # in memory: tomio Volume
 ```
 
 ## Export and anonymisation

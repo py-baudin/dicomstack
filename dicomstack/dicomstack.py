@@ -306,9 +306,16 @@ class DicomStack(object):
         return sorted(varying)
 
     def table(self, *fields: Field) -> list[dict]:
-        """list of {field: value} for each frame (default fields: fields())"""
+        """list of {field: value} for each frame (default fields: fields())
+
+        keys: the fields; selectors are named by their keys, e.g. "ImageType[2]"
+        """
         fields = fields or self.fields()
-        return [{field: frame.get(field) for field in fields} for frame in self.frames]
+        names = [field_name(field) for field in fields]
+        return [
+            {name: frame.get(field) for name, field in zip(names, fields)}
+            for frame in self.frames
+        ]
 
     def to_dataframe(self, *fields: Field) -> Any:
         """pandas DataFrame of the fields' values (one row per frame); requires pandas"""
@@ -317,7 +324,8 @@ class DicomStack(object):
         except ImportError:
             raise ImportError("pandas is required for to_dataframe (pip install pandas)")
         fields = fields or self.fields()
-        return pandas.DataFrame(self.table(*fields), columns=list(fields))
+        columns = [field_name(field) for field in fields]
+        return pandas.DataFrame(self.table(*fields), columns=columns)
 
     def export(self, dest: Union[str, os.PathLike], anonymize: bool = True, **kwargs) -> list:
         """export (anonymized) copies of the stack's files in folder dest
@@ -661,8 +669,8 @@ class DicomStack(object):
         strict: if True, raise ValueError on non-uniform slice spacing (else warn)
         dtype: data type of the volume (default: float64)
         workers: number of threads reading the pixels (I/O only; None: sequential)
-        stack: (with `by`) return a single volume (x, y, z, n) instead, with the values
-            of the `by` fields in vol.metadata[field] (as strings)
+        stack: (with `by`) return (values, volume): a single volume (x, y, z, n) instead
+            of a list (the values of the `by` fields are also in vol.metadata, as strings)
         """
         LOGGER.debug("Make volume (use fields: %s)", by)
 
@@ -692,8 +700,8 @@ class DicomStack(object):
         if not stack:
             return indices, volumes
         elif not volumes:
-            return None
-        return stack_volumes(volumes, by, indices)
+            return indices, None
+        return indices, stack_volumes(volumes, by, indices)
 
     def _existing(self, fields):
         """return frames with existing values"""
@@ -795,6 +803,22 @@ def _series_key(seriesnumber):
         return (1, 0, seriesnumber)
 
 
+def field_name(field):
+    """hashable name of a field: selectors as "ImageType[2]", "Sequence[0].Keyword"
+
+    (selectors are not hashable: their == builds a query)
+    """
+    if not isinstance(field, Selector):
+        return field
+    name = ""
+    for key in field.keys:
+        if isinstance(key, int):
+            name += f"[{key}]"
+        else:
+            name += ("." if name else "") + str(key)
+    return name
+
+
 def stack_volumes(volumes, fields, indices, tol=1e-6):
     """stack volumes with the same geometry in a single (x, y, z, n) volume
 
@@ -807,10 +831,11 @@ def stack_volumes(volumes, fields, indices, tol=1e-6):
             for name in ("origin", "spacing", "transform")
         ):
             raise ValueError("Cannot stack volumes with different shapes or geometries")
+    names = [field_name(field) for field in fields]
     if len(fields) == 1:
-        metadata = {fields[0]: str(list(indices))}
+        metadata = {names[0]: str(list(indices))}
     else:
-        metadata = {field: str([values[i] for values in indices]) for i, field in enumerate(fields)}
+        metadata = {name: str([values[i] for values in indices]) for i, name in enumerate(names)}
     return pixeldata.DicomVolume(
         np.stack([np.asarray(volume) for volume in volumes], axis=-1),
         origin=first.origin,

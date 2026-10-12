@@ -548,11 +548,23 @@ class DicomFrame:
     def __setstate__(self, state):
         self.__init__(state["dicomfile"], index=state["index"])
 
+    # fields shown by repr (all elements: print(frame.dataset))
+    REPR_FIELDS = ("Modality", "SeriesNumber", "SeriesDescription", "InstanceNumber")
+
     def __repr__(self):
-        """represent DICOM frame"""
-        if not self._dataset:
-            return "DICOM frame (pending)"
-        return "DICOM frame\n" + str(self._dataset)
+        """DicomFrame(path/IM1.dcm, MR, SeriesNumber=5, ...)"""
+        source = str(self.dicomfile.filename)
+        if self.index is not None:
+            source += f" [{self.index}]"
+        items = [source]
+        for field in self.REPR_FIELDS:
+            try:
+                value = self.get(field)
+            except Exception:  # (e.g. unreadable file)
+                value = None
+            if value is not None:
+                items.append(value if field == "Modality" else f"{field}={value!r}")
+        return f"DicomFrame({', '.join(map(str, items))})"
 
     def keywords(self):
         """keywords of the frame's elements (incl. automatic keywords of private ones)"""

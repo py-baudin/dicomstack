@@ -9,6 +9,7 @@
 - Added: `stack.iter_pixels(workers=)` and `as_volume(dtype=)`.
 - Added: `DicomStack(dedup=)`: duplicate detection by `"uid"` or `"content"`.
 - Added: `fields()`, `varying()`, `table()`, `to_dataframe()` to explore stacks.
+- Added: selectors as fields of `table()`, named by their keys (`"ImageType[2]"`).
 - Added: `groupby()`, `series()`, `stack[int]`, `stack[slice]`, `+`, `-`, `&`.
 - Added: `sort(missing=)`, `as_volume(stack=True)`, `DicomVolume.affine`.
 - Added: `DicomStack(include=, exclude=, recursive=, progress=)`.
@@ -29,6 +30,7 @@
 - Changed: `regex()` matches anywhere in the value (`re.search`); `^` anchors.
 - Changed: queries are evaluated without `eval`.
 - Changed: `repr(stack)` shows frames, studies and series.
+- Changed: `repr(frame)` shows its file and main fields (all: `frame.dataset`).
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: warnings point to the calling code.
