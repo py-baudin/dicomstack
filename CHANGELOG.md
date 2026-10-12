@@ -3,12 +3,15 @@
 ## Unreleased
 
 ### Added
+- Added: `DicomStack(dedup=)`: duplicate detection by `"uid"` or `"content"`.
 - Added: `MultipleValuesError` and `NoValueError` raised by `single()`.
 - Added: `isin()` alias of `is_in()` on selectors.
 - Added: `as_volume(tol=, strict=)` to check slice spacing uniformity.
 
 ### Changed
 - Changed: requires Python >= 3.10 and pydicom >= 3, < 4.
+- Changed: duplicates detected by SOPInstanceUID; dedup="content" for the old behaviour.
+- Changed: file bytes are no longer kept in memory; fields are converted on access.
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.

@@ -7,6 +7,8 @@ import pathlib
 import re
 import datetime
 import itertools
+import functools
+import hashlib
 from io import BytesIO, StringIO
 from collections import OrderedDict
 import zipfile
@@ -39,14 +41,20 @@ class NoValueError(ValueError):
 class DicomStack(object):
     """load, sort and filter DICOM images"""
 
-    def __init__(self, path=None, filenames=None, *, duplicates="remove"):
+    def __init__(self, path=None, filenames=None, *, duplicates="remove", dedup="uid"):
         """path can be:
         * a directory (or a list of),
         * a file (or a list of)
         * a zip file
 
         duplicates: 'remove', 'error', 'ignore'
+        dedup: how duplicated frames are detected
+            'uid': same SOPInstanceUID and frame index (files without UID are never merged)
+            'content': same file contents and frame index (reads whole files when loading)
         """
+        if not dedup in DEDUP_MODES:
+            raise ValueError(f"Invalid dedup mode: {dedup} (options: {DEDUP_MODES})")
+        self._dedup = dedup
 
         self.frames = []
         self.non_dicom = []
@@ -506,7 +514,7 @@ class DicomStack(object):
 
         try:
             # read dicom object
-            dicomfile = DicomFile(filepath)
+            dicomfile = DicomFile(filepath, dedup=self._dedup)
             frames = dicomfile.frames
         except (IOError, InvalidDicomError):
             # other files
@@ -547,7 +555,12 @@ class DicomStack(object):
 
                 try:
                     # read dicom object
-                    dicomfile = DicomFile(full_zfilename, bytes=zf.read(zfile))
+                    dicomfile = DicomFile(
+                        full_zfilename,
+                        bytes=zf.read(zfile),
+                        source=(zip_path, zfile.filename),
+                        dedup=self._dedup,
+                    )
                     frames = dicomfile.frames
                 except (IOError, InvalidDicomError):
                     # other files
@@ -600,35 +613,69 @@ def _series_key(seriesnumber):
 
 
 class DicomFile:
-    """pickable DICOM file"""
+    """pickable DICOM file
 
-    _dataset = None
+    Keeps the DICOM header (dataset without pixel data), not the file's bytes.
+    Pixels are read on demand.
+
+    filename: displayed path (zip members: zip path / member name)
+    source: path to the file, or (zip path, member name)
+    dedup: file identity: 'uid' (SOPInstanceUID) or 'content' (hash of the file)
+    """
+
+    _dataset = None  # header
     _pixels = None
     _frames = None
+    _identity = None
+    _lookup = None
 
-    def __init__(self, filename, bytes=None):
-        """init DicomFile object"""
-        logging.debug(f"DicomFile {filename}: init")
-        if not bytes:
-            # load filename
-            if not pydicom.misc.is_dicom(filename):
-                raise InvalidDicomError("Invalid DICOM file: %s" % filename)
-            with open(filename, "rb") as fp:
-                bytes = fp.read()
+    def __init__(self, filename, bytes=None, *, source=None, dedup="uid"):
+        """init DicomFile object (the header is read on demand)
 
-        self.bytes = bytes
+        bytes: contents of the file (e.g. zip member), read now but not kept
+        """
+        if not dedup in DEDUP_MODES:
+            raise ValueError(f"Invalid dedup mode: {dedup} (options: {DEDUP_MODES})")
         self.filename = filename
+        self.source = str(filename) if source is None else source
+        self.dedup = dedup
+        self.digest = None
+        self.pixel_offset = None
+        if bytes is not None:
+            self._read_header(bytes)
+
+    @property
+    def identity(self):
+        """identity of the file (for duplicate detection)"""
+        if self._identity is None:
+            element = self.dataset.get(SOP_INSTANCE_UID)
+            uid = element.value if element is not None else None
+            if self.dedup == "content":
+                self._identity = ("content", self.digest)
+            elif uid:
+                self._identity = ("uid", str(uid))
+            else:
+                # never merged with other files
+                self._identity = ("source", self.source)
+        return self._identity
 
     def __hash__(self):
-        # return hash(self.bytes[:1000])
-        return hash(self.bytes)
+        return hash(self.identity)
+
+    def __eq__(self, other):
+        if not isinstance(other, DicomFile):
+            return NotImplemented
+        return self.identity == other.identity
 
     # pickle
     def __getstate__(self):
-        return (self.filename, self.bytes)
+        state = dict(self.__dict__)
+        for name in ["_pixels", "_frames", "_lookup"]:
+            state.pop(name, None)
+        return state
 
     def __setstate__(self, state):
-        self.filename, self.bytes = state
+        self.__dict__.update(state)
 
     def __repr__(self):
         repr = f"DicomFile({self.filename}"
@@ -642,9 +689,9 @@ class DicomFile:
 
     @property
     def dataset(self):
-        """retrieve DICOM dataset"""
+        """DICOM header (pydicom dataset without pixel data)"""
         if self._dataset is None:
-            self._load_dataset()
+            self._read_header()
         return self._dataset
 
     @property
@@ -667,28 +714,45 @@ class DicomFile:
     def pixels(self):
         """retrieve pixel data"""
         if self._pixels is None:
-            if not "PixelData" in self.dataset:
-                # TODO read only Pixels ? cf specific_tags in dcmread
-                self._load_dataset(load_pixels=True)
-            self._pixels = self.dataset.pixel_array
+            dataset, _ = self._read(stop_before_pixels=False)
+            self._pixels = dataset.pixel_array
         return self._pixels
 
-    def _load_dataset(self, load_pixels=False):
-        """parse DICOM object stored in bytes"""
-        logging.debug(f"DicomFile {self.filename}: load dataset")
+    def get_element(self, key, index=None):
+        """pydicom element of frame `index` for key (keyword, "[Name]" or tag)
 
-        with config.strict_reading():
-            try:
-                dataset = pydicom.dcmread(
-                    BytesIO(self.bytes), stop_before_pixels=not load_pixels
-                )
-            except EOFError as exc:
-                warnings.warn(str(exc))
-                delimiter = b"\xfe\xff\xdd\xe0"  # sequence delimiter
-                dataset = pydicom.dcmread(
-                    BytesIO(self.bytes + delimiter), stop_before_pixels=not load_pixels
-                )
-        self._dataset = dataset
+        Same rules as DicomDataset.from_dataset(self.dataset, index)[key]
+        """
+        if self._lookup is None:
+            self._lookup = FileLookup(self.dataset)
+        return self._lookup.get(key, index)
+
+    def _read_header(self, data=None):
+        """read the header, from data (bytes) or from the source
+
+        The file's bytes are read at once (parsing from memory is faster), then dropped.
+        """
+        if data is None:
+            data = self._read_bytes()
+        self._dataset, offset = read_dataset(data, stop_before_pixels=True)
+        # pixel data can be read directly from regular files only
+        self.pixel_offset = None if isinstance(self.source, tuple) else offset
+        if self.dedup == "content":
+            self.digest = hashlib.blake2b(data, digest_size=16).digest()
+
+    def _read(self, stop_before_pixels=True):
+        """read source, return pydicom dataset and offset of the pixel data element"""
+        return read_dataset(self._read_bytes(), stop_before_pixels)
+
+    def _read_bytes(self):
+        """contents of the source file"""
+        if isinstance(self.source, tuple):
+            # zip member
+            zip_path, member = self.source
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                return zf.read(member)
+        with open(self.source, "rb") as fp:
+            return fp.read()
 
 
 class DicomDataset:
@@ -696,7 +760,6 @@ class DicomDataset:
 
     def __init__(self, elements):
         """elements is a list of DicomElement"""
-        logging.debug(f"DicomDataset {len(elements)}: init")
         self.elements = elements
         self.elements_by_tag = {elmt.tag: elmt for elmt in self.elements}
         self.elements_by_keyword = {
@@ -760,17 +823,31 @@ class DicomFrame:
         """
         index: frame index in multi-frame (enhanced DICOM)
         """
-        logging.debug(f"DicomFrame {dicomfile.filename} ({index}): init")
         self.dicomfile = dicomfile
         self.index = index
         self._dataset = None
         self._pixels = pixels
+        self._values = {}  # cache of converted values
+
+    @property
+    def identity(self):
+        """identity of the frame (for duplicate detection)"""
+        return self.dicomfile.identity + (self.index,)
 
     def __hash__(self):
-        return hash(self.dicomfile) ^ hash(self.index)
+        return hash(self.identity)
 
     def __eq__(self, other):
-        return hash(self) == hash(other)
+        if not isinstance(other, DicomFrame):
+            return NotImplemented
+        return self.identity == other.identity
+
+    # pickle
+    def __getstate__(self):
+        return {"dicomfile": self.dicomfile, "index": self.index}
+
+    def __setstate__(self, state):
+        self.__init__(state["dicomfile"], index=state["index"])
 
     def __repr__(self):
         """represent DICOM frame"""
@@ -781,10 +858,7 @@ class DicomFrame:
     @property
     def dataset(self):
         if not self._dataset:
-            # load dataset
-            logging.debug(
-                f"DicomFrame {self.dicomfile.filename} ({self.index}): parse dataset"
-            )
+            # convert the whole dataset
             self._dataset = DicomDataset.from_dataset(
                 self.dicomfile.dataset, index=self.index
             )
@@ -803,21 +877,23 @@ class DicomFrame:
 
     def __getitem__(self, field):
         """get field value"""
-        if isinstance(field, Selector):
-            keys = field.keys
-        elif isinstance(field, str):
-            keys = parse_keys(field)
-        else:
-            keys = [field]
+        keys = compile_keys(field)
+        try:
+            return self._values[keys]
+        except (KeyError, TypeError):  # TypeError: unhashable keys
+            pass
 
-        container = self.dataset
-        for _key in keys:
-            item = container[_key]
-            container = item
+        # only the requested element is converted
+        node = self.dicomfile.get_element(keys[0], self.index)
+        for key in keys[1:]:
+            node = get_subitem(node, key)
+        value = get_leaf(node)
 
-        if isinstance(item, DicomElement):
-            return item.value
-        return item
+        try:
+            self._values[keys] = value
+        except TypeError:
+            pass
+        return value
 
     def get(self, field, default=None):
         """similar to dict.get"""
@@ -863,9 +939,7 @@ class DicomTag:
 
 # helper for creating queries
 class DicomTagSelector:
-    def __init__(self):
-        for tag in pydicom.datadict.DicomDictionary.values():
-            setattr(self, tag[-1], Selector(tag[-1]))
+    """DICOM.Keyword, DICOM["[Private Name]"], DICOM[(group, element)]: query selectors"""
 
     def __getitem__(self, sel):
         if DicomTag.is_tag(sel):
@@ -873,7 +947,13 @@ class DicomTagSelector:
         return Selector(sel)
 
     def __getattr__(self, sel):
+        if sel.startswith("__"):
+            raise AttributeError(sel)
         return self[sel]
+
+    def __dir__(self):
+        # tab completion of DICOM keywords
+        return sorted(set(super().__dir__()) | set(pydicom.datadict.keyword_dict))
 
 
 DICOM = DicomTagSelector()
@@ -893,11 +973,7 @@ class DicomElement:
 
     @classmethod
     def from_element(cls, element):
-        keyword = element.keyword
-        if not keyword and element.name.startswith("["):
-            # automatic keyword
-            keyword = re.sub(r"[^\w\[\]]|_", "", element.name)
-
+        keyword = element_keyword(element)
         return cls(
             str(element.name),
             DicomTag(element.tag.group, element.tag.element),
@@ -967,18 +1043,15 @@ def parse_dataset(dataset, index=None, flatten=False):
 
         elif element.keyword == "PerFrameFunctionalGroupsSequence":
             # multi-frame DICOM: flatten sub-dataset
-            logging.debug("Parse subdataset PerFrameFunctionalGroupsSequence")
             elements.extend(parse_dataset(element[index], flatten=True))
 
         elif element.keyword == "SharedFunctionalGroupsSequence":
             # multi-frame DICOM: flatten sub-dataset
-            logging.debug("Parse subdataset PerFrameFunctionalGroupsSequence")
             for _dataset in element:
                 elements.extend(parse_dataset(_dataset, flatten=True))
 
         elif flatten and element.VR == "SQ":
             # flatten sequences
-            logging.debug(f"Parse subdataset {element}")
             for _dataset in element:
                 elements.extend(parse_dataset(_dataset, flatten=True))
 
@@ -988,6 +1061,220 @@ def parse_dataset(dataset, index=None, flatten=False):
 
     # make dataset
     return elements
+
+
+#
+# thin access to pydicom datasets
+# (same results as DicomDataset/DicomElement, converting only the requested elements)
+
+DEDUP_MODES = ("uid", "content")
+
+SHARED_GROUPS = 0x52009229  # SharedFunctionalGroupsSequence
+PER_FRAME_GROUPS = 0x52009230  # PerFrameFunctionalGroupsSequence
+PIXEL_DATA = 0x7FE00010
+SOP_INSTANCE_UID = 0x00080018
+SEQUENCE_DELIMITER = b"\xfe\xff\xdd\xe0"
+
+
+def read_dataset(data, stop_before_pixels=True):
+    """read DICOM dataset from bytes (the bytes are not kept)
+
+    returns: dataset, offset of the pixel data element (None if unknown)
+    """
+    buffer = BytesIO(data)
+    with config.strict_reading():
+        try:
+            dataset = pydicom.dcmread(buffer, stop_before_pixels=stop_before_pixels)
+            offset = buffer.tell() if stop_before_pixels else None
+        except EOFError as exc:
+            warnings.warn(str(exc))
+            buffer = BytesIO(data + SEQUENCE_DELIMITER)
+            dataset = pydicom.dcmread(buffer, stop_before_pixels=stop_before_pixels)
+            offset = None
+    # pydicom keeps a reference to the buffer
+    dataset.buffer = None
+    return dataset, offset
+
+
+def element_keyword(element):
+    """keyword of a pydicom element, or automatic keyword of a named private element"""
+    keyword = element.keyword
+    if not keyword and element.name.startswith("["):
+        keyword = re.sub(r"[^\w\[\]]|_", "", element.name)
+    return keyword
+
+
+@functools.lru_cache(maxsize=4096)
+def _parse_keys(string):
+    return tuple(parse_keys(string))
+
+
+def compile_keys(field):
+    """keys (tuple) of a field: string, Selector or tag"""
+    if isinstance(field, Selector):
+        return tuple(field.keys)
+    elif isinstance(field, str):
+        return _parse_keys(field)
+    return (field,)
+
+
+class DatasetLookup:
+    """element lookup in a pydicom dataset (not flattened), as DicomDataset[key]"""
+
+    def __init__(self, dataset, meta=None, exclude=()):
+        self.dataset = dataset
+        self.meta = meta  # file meta information
+        self.exclude = frozenset(exclude) | {PIXEL_DATA}  # tags not accessible
+        self._private = None
+
+    def find(self, key):
+        """pydicom element for key (tag, keyword or "[Name]")"""
+        if DicomTag.is_tag(key):
+            tag = DicomTag(*key)
+            element = self.by_tag((tag.group << 16) | tag.element)
+            if element is None:
+                raise KeyError(tag)
+            return element
+        elif not isinstance(key, str):
+            raise TypeError(f"Invalid key type: {key}")
+        element = self.by_keyword(key)
+        if element is None:
+            raise KeyError(key)
+        return element
+
+    def by_tag(self, tag):
+        if tag in self.exclude:
+            return None
+        # the dataset's element takes precedence
+        for container in (self.dataset, self.meta):
+            if container is not None and tag in container:
+                return container[tag]
+        return None
+
+    def by_keyword(self, keyword):
+        if keyword.startswith("["):
+            tag = self._private_index().get(keyword)
+            return None if tag is None else self.by_tag(tag)
+        # (elements of repeating groups, e.g. OverlayData, have no keyword in pydicom)
+        tag = pydicom.datadict.tag_for_keyword(keyword)
+        return None if tag is None else self.by_tag(tag)
+
+    def _tags(self):
+        """sorted tags (meta, then dataset), last wins"""
+        tags = sorted(self.meta.keys()) if self.meta is not None else []
+        return tags + sorted(self.dataset.keys())
+
+    def _private_index(self):
+        """automatic keyword of named private elements: tag"""
+        if self._private is None:
+            self._private = {}
+            for tag in self._tags():
+                if tag.group % 2 == 0 or tag in self.exclude:
+                    continue
+                keyword = element_keyword(self.by_tag(tag))
+                if keyword:
+                    self._private[keyword] = tag
+        return self._private
+
+
+class FileLookup:
+    """frame-level element lookup in a DICOM header, as DicomDataset.from_dataset(header, index)
+
+    multi-frame files: for frame i, top-level elements after the functional groups
+    > per-frame group i > shared groups > other top-level elements (last occurrence wins)
+    """
+
+    def __init__(self, header):
+        self.header = header
+        self.multiframe = SHARED_GROUPS in header or PER_FRAME_GROUPS in header
+        exclude = {SHARED_GROUPS, PER_FRAME_GROUPS} if self.multiframe else ()
+        meta = getattr(header, "file_meta", None)
+        self.top = DatasetLookup(header, meta=meta, exclude=exclude)
+        self._shared = None
+        self._per_frame = None
+
+    def get(self, key, index=None):
+        if not self.multiframe:
+            return self.top.find(key)
+
+        if DicomTag.is_tag(key):
+            tag = DicomTag(*key)
+            group_key = (tag.group << 16) | tag.element
+        elif isinstance(key, str):
+            group_key = key
+        else:
+            raise TypeError(f"Invalid key type: {key}")
+
+        try:
+            element = self.top.find(key)
+        except KeyError:
+            element = None
+        if element is not None and element.tag > PER_FRAME_GROUPS:
+            return element
+        for group in self._groups(index):
+            if group_key in group:
+                return group[group_key]
+        if element is None:
+            raise KeyError(key)
+        return element
+
+    def _groups(self, index):
+        """flattened functional groups for frame `index`: per-frame, shared"""
+        if self._shared is None:
+            header = self.header
+            shared = header[SHARED_GROUPS].value if SHARED_GROUPS in header else []
+            per_frame = header[PER_FRAME_GROUPS].value if PER_FRAME_GROUPS in header else []
+            self._shared = index_elements(itertools.chain(*map(flatten_elements, shared)))
+            self._per_frame = [index_elements(flatten_elements(item)) for item in per_frame]
+        if index is None or not self._per_frame:
+            return [self._shared]
+        return [self._per_frame[index], self._shared]
+
+
+def flatten_elements(dataset):
+    """elements of dataset with nested sequences flattened (cf. parse_dataset(flatten=True))"""
+    for element in dataset:
+        if element.keyword == "PixelData":
+            continue
+        elif element.VR == "SQ":
+            for item in element.value:
+                yield from flatten_elements(item)
+        else:
+            yield element
+
+
+def index_elements(elements):
+    """dict of elements by tag (int) and keyword, last occurrence wins"""
+    index = {}
+    for element in elements:
+        index[int(element.tag)] = element
+        keyword = element_keyword(element)
+        if keyword:
+            index[keyword] = element
+    return index
+
+
+def get_subitem(node, key):
+    """node[key], as DicomElement[key] / DicomDataset[key]"""
+    if isinstance(node, pydicom.DataElement):
+        if node.VR == "SQ" and isinstance(node.value, pydicom.Sequence) and isinstance(key, int):
+            # sequence item: not converted
+            return DatasetLookup(node.value[key])
+        return parse_element_value(node.value, node.VR)[key]
+    elif isinstance(node, DatasetLookup):
+        return node.find(key)
+    return node[key]
+
+
+def get_leaf(node):
+    """value of node, as DicomFrame.__getitem__ returned it"""
+    if isinstance(node, pydicom.DataElement):
+        return parse_element_value(node.value, node.VR)
+    elif isinstance(node, DatasetLookup):
+        return DicomDataset.from_dataset(node.dataset)
+    elif isinstance(node, DicomElement):
+        return node.value
+    return node
 
 
 def parse_element_value(value, VR):
@@ -1047,7 +1334,9 @@ def parse_element_value(value, VR):
 
 def get_nframe(dataset):
     """return number of frames if several"""
-    frames = getattr(dataset, "PerFrameFunctionalGroupsSequence", None)
+    if not PER_FRAME_GROUPS in dataset:
+        return None
+    frames = dataset[PER_FRAME_GROUPS].value
     if frames:
         return len(frames)
     # else
