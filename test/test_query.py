@@ -4,13 +4,18 @@ from dicomstack.query import Query, Selector
 
 
 def test_selector_class():
-    assert Selector().key == ()
+    # Selector.__eq__ returns a (truthy) Query: compare the keys tuples
+    assert tuple(Selector().keys) == ()
 
-    assert Selector("a").key == ("a",)
-    assert Selector().a.key == ("a",)
+    assert tuple(Selector("a").keys) == ("a",)
+    assert tuple(Selector().a.keys) == ("a",)
 
-    assert Selector("a", 0).key == ("a", 0)
-    assert Selector().a[0].key == ("a", 0)
+    assert tuple(Selector("a", 0).keys) == ("a", 0)
+    assert tuple(Selector().a[0].keys) == ("a", 0)
+
+    # a wrong value must fail
+    assert tuple(Selector("a").keys) != ("b",)
+    assert isinstance(Selector("a").keys, tuple)
 
     assert len(Selector()) == 0
     assert len(Selector("a")) == 1
