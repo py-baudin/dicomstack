@@ -230,6 +230,17 @@ def test_include_exclude_recursive(folder):
     assert len(DicomStack(filenames=files, exclude="*.txt").non_dicom) == 0
 
 
+def test_files_sorted(folder, monkeypatch):
+    # files are loaded in path order, whatever the file system's order
+    import pathlib
+
+    rglob = pathlib.Path.rglob
+    monkeypatch.setattr(pathlib.Path, "rglob", lambda self, pattern: reversed(list(rglob(self, pattern))))
+    filenames = [name.replace("\\", "/") for name in DicomStack(folder).filenames]
+    assert filenames == sorted(filenames)
+    assert filenames[0] == "s1/im1_0.dcm"
+
+
 def test_glob_pattern(folder, monkeypatch):
     # the root is computed from the matched paths, not from the pattern
     monkeypatch.chdir(folder)

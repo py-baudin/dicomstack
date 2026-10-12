@@ -747,7 +747,8 @@ def list_files(pathes, recursive=True):
                 files.append(subpath)
             else:
                 found = subpath.rglob("*") if recursive else subpath.glob("*")
-                files.extend([file for file in found if file.is_file()])
+                # sorted: same order on all file systems
+                files.extend(sorted(file for file in found if file.is_file()))
 
     if not files:  # empty
         return None, []

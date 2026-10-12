@@ -29,6 +29,7 @@
 - Changed: private values are read from the file when accessed (less memory).
 - Changed: `regex()` matches anywhere in the value (`re.search`); `^` anchors.
 - Changed: queries are evaluated without `eval`.
+- Changed: files of a folder are loaded in path order (same on all systems).
 - Changed: `repr(stack)` shows frames, studies and series.
 - Changed: `repr(frame)` shows its file and main fields (all: `frame.dataset`).
 - Changed: `as_volume` warns on missing or irregular slices.
