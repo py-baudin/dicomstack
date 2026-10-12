@@ -73,7 +73,7 @@ stack = DicomStack("data", cache=True)        # writes data/.dicomstack-cache.js
 stack = DicomStack("data", cache=True)        # unchanged files: not parsed
 ```
 
-**Slow storage.** On network file systems, `workers=8` reads the files ahead in threads (headers are still parsed one by one: threads do not speed up parsing on a local disk).
+**Threads.** By default, 8 threads read the files ahead (`workers=8`, also for `as_volume` and `iter_pixels`), while headers and pixels are decoded one by one: much faster on network storage, about the same on a local disk. `workers=None` reads the files sequentially.
 
 **In-memory datasets.**
 
@@ -291,7 +291,7 @@ Indicative numbers (2,000 single-frame MR files, 350 MB, Windows laptop, warm di
 | all pixels | ~0.7 s |
 | load with the header cache | ~0.3 s |
 
-Loading is dominated by pydicom's header parsing, which threads do not speed up (`workers=` only helps on slow storage). Uncompressed pixel data is read directly from the files; other transfer syntaxes are decoded by pydicom.
+Loading is dominated by pydicom's header parsing, which threads do not speed up; the default reading threads (`workers=8`) pay off on slow (network) storage. Uncompressed pixel data is read directly from the files; other transfer syntaxes are decoded by pydicom.
 
 ## Development
 

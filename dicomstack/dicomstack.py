@@ -57,6 +57,9 @@ LOGGER = logging.getLogger(__name__)
 Field = Union[str, Selector, DicomTag, Tuple[int, int]]
 
 
+# default number of threads reading files (I/O only): see DicomStack
+WORKERS = 8
+
 # fields ignored by DicomStack.varying: per-instance values
 VARYING_EXCLUDE = (
     "SOPInstanceUID",
@@ -98,7 +101,7 @@ class DicomStack(object):
         *,
         duplicates="remove",
         dedup="uid",
-        workers=None,
+        workers=WORKERS,
         cache=None,
         include=None,
         exclude=None,
@@ -121,7 +124,8 @@ class DicomStack(object):
             'uid': same SOPInstanceUID and frame index (files without UID are never merged)
             'content': same file contents and frame index
         workers: number of threads reading the files ahead (headers are parsed in the
-            main thread). Useful on slow (e.g. network) storage only.
+            main thread); much faster on slow (e.g. network) storage, about the same on a
+            local disk. None or 0: sequential
         cache: header cache file, to skip parsing unchanged files on later loads
             None/False: no cache; True: default location (`.dicomstack-cache.json.gz`
             in the data folder, or the user cache directory if not writable);
@@ -613,10 +617,10 @@ class DicomStack(object):
         func = all if how == "all" else any
         return func(frame.get(field) is not None for frame in self.frames)
 
-    def iter_pixels(self, workers: Optional[int] = None) -> Iterator[np.ndarray]:
+    def iter_pixels(self, workers: Optional[int] = WORKERS) -> Iterator[np.ndarray]:
         """iterate the frames' pixel arrays
 
-        workers: number of threads reading the files ahead (I/O only; useful on slow storage)
+        workers: number of threads reading the files ahead (I/O only; None: sequential)
         """
         if not workers:
             for frame in self.frames:
@@ -647,7 +651,7 @@ class DicomStack(object):
         tol=1e-3,
         strict=False,
         dtype=None,
-        workers=None,
+        workers=WORKERS,
         stack=False,
     ):
         """as volume
@@ -656,7 +660,7 @@ class DicomStack(object):
         tol: relative tolerance on the uniformity of the slice spacing
         strict: if True, raise ValueError on non-uniform slice spacing (else warn)
         dtype: data type of the volume (default: float64)
-        workers: number of threads reading the pixels (I/O only; useful on slow storage)
+        workers: number of threads reading the pixels (I/O only; None: sequential)
         stack: (with `by`) return a single volume (x, y, z, n) instead, with the values
             of the `by` fields in vol.metadata[field] (as strings)
         """

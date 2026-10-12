@@ -144,7 +144,7 @@ def series(tmp_path, legs):
 
 
 def test_load_workers(series):
-    stack = DicomStack(series)
+    stack = DicomStack(series, workers=None)  # sequential
     stack2 = DicomStack(series, workers=4)
     assert stack2.filenames == stack.filenames
     assert stack2.non_dicom == stack.non_dicom == ["notes.txt"]
@@ -154,7 +154,7 @@ def test_load_workers(series):
 
 def test_iter_pixels_workers(series, multi, monkeypatch):
     stack = DicomStack(series)
-    expected = list(DicomStack(series).iter_pixels())
+    expected = list(DicomStack(series, workers=None).iter_pixels(workers=None))
     assert all(np.array_equal(a, b) for a, b in zip(stack.iter_pixels(workers=4), expected))
 
     # multi-frame: the file is read once
@@ -170,7 +170,7 @@ def test_iter_pixels_workers(series, multi, monkeypatch):
 
 def test_as_volume_workers_dtype(series):
     stack = DicomStack(series)
-    indices, volumes = stack.as_volume(by="EchoTime")
+    indices, volumes = stack.as_volume(by="EchoTime", workers=None)
     indices2, volumes2 = DicomStack(series).as_volume(by="EchoTime", workers=4)
     assert indices2 == indices
     assert all(np.array_equal(a, b) for a, b in zip(volumes, volumes2))

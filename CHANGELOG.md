@@ -5,7 +5,7 @@
 ### Added
 - Added: `DicomStack(cache=)`: optional header cache file for faster reloads.
 - Added: `--cache` option of the `list`, `elements` and `values` commands.
-- Added: `workers=` threads reading files (slow storage) in loads and volumes.
+- Added: `workers=` threads reading files in loads and volumes (default: 8).
 - Added: `stack.iter_pixels(workers=)` and `as_volume(dtype=)`.
 - Added: `DicomStack(dedup=)`: duplicate detection by `"uid"` or `"content"`.
 - Added: `fields()`, `varying()`, `table()`, `to_dataframe()` to explore stacks.
