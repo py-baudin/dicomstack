@@ -298,13 +298,141 @@ def test_volume_spacing_non_square(oblique):
         assert volume[i, j, k] == pixels[k][j, i]
 
 
-def test_format_pixels_spacing(oblique):
+def test_dicomvolume_attributes():
+    geometry = dict(origin=(1, 2, 3), spacing=(0.5, 0.8, 2), transform=((1, 0, 0), (0, 1, 0), (0, 0, 1)))
+    vol = pixeldata.DicomVolume(np.zeros((4, 3, 2)), metadata={"EchoTime": 10.0}, **geometry)
+    assert (vol.origin, vol.spacing, vol.transform) == tuple(geometry.values())
+    assert vol.metadata == {"EchoTime": "10.0"}
+    with pytest.deprecated_call():
+        assert vol.tags == geometry
+
+    # kept by views and elementwise operations, dropped by reductions
+    assert (vol + 1).spacing == geometry["spacing"]
+    assert vol.T.metadata == vol.metadata
+    assert not isinstance(vol.sum(axis=0), pixeldata.DicomVolume)
+
+    # deprecated `tags` keyword
+    with pytest.deprecated_call():
+        vol = pixeldata.DicomVolume(np.zeros((2, 2, 2)), tags=geometry)
+    assert (vol.origin, vol.spacing, vol.transform) == tuple(geometry.values())
+    assert vol.metadata == {}
+
+
+def test_dicomvolume_slicing(oblique):
     stack, pixels, geo = oblique
     volume = stack.as_volume(rescale=False)
-    # a slice in DICOM layout (rows, columns)
-    tags, _ = pixeldata.format_pixels(volume[:, :, 0].T, dtype="uint16")
+
+    def coords(vol, index):
+        pos = np.array(vol.origin)
+        for axis, i in enumerate(index):
+            pos = pos + i * vol.spacing[axis] * np.array(vol.transform[axis])
+        return pos
+
+    # slices: geometry updated
+    nx = volume.shape[0]
+    for key, start, step in [
+        (np.s_[:, :, 1:2], (0, 0, 1), (1, 1, 1)),
+        (np.s_[5:, ::2], (5, 0, 0), (1, 2, 1)),
+        (np.s_[..., 2:3], (0, 0, 2), (1, 1, 1)),
+        (np.s_[::-1], (nx - 1, 0, 0), (-1, 1, 1)),
+    ]:
+        sub = volume[key]
+        assert isinstance(sub, pixeldata.DicomVolume)
+        assert np.allclose(sub.origin, coords(volume, start))
+        # voxel (1, 1, 0) of sub: same value and position as in volume
+        index = tuple(a + b for a, b in zip(start, np.multiply(step, (1, 1, 0))))
+        assert sub[1, 1, 0] == volume[index]
+        assert np.allclose(coords(sub, (1, 1, 0)), coords(volume, index))
+
+    # integer index on a spatial axis: plain array
+    assert type(volume[:, :, 0]) is np.ndarray
+    assert type(volume[0]) is np.ndarray
+    assert type(volume[[0, 1]]) is np.ndarray
+
+
+def test_write_volume_slices(tmp_path, oblique):
+    """write a volume slice by slice, read it back"""
+    stack, pixels, geo = oblique
+    volume = stack.as_volume(rescale=False).astype("uint16")
+    study_uid, series_uid = generate_uid(), generate_uid()
+    (tmp_path / "out").mkdir()
+    for k in range(volume.shape[2]):
+        utils.write_dataset(
+            volume[:, :, k : k + 1],
+            str(tmp_path / "out" / f"im{k}.dcm"),
+            StudyInstanceUID=study_uid,
+            SeriesInstanceUID=series_uid,
+            InstanceNumber=k + 1,
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        stack2 = DicomStack(tmp_path / "out")
+        volume2 = stack2.as_volume(rescale=False)
+
+    for k, frame in enumerate(stack2.sort("InstanceNumber")):
+        assert np.array_equal(frame.pixels, pixels[k])
+    assert np.array_equal(volume2, volume)
+    assert np.allclose(volume2.origin, volume.origin, atol=1e-6)
+    assert np.allclose(volume2.spacing, volume.spacing, atol=1e-6)
+    assert np.allclose(volume2.transform, volume.transform, atol=1e-6)
+
+
+def test_format_pixels_plain_array():
+    data = np.arange(3 * 4, dtype="uint16").reshape((3, 4))
+    tags, raw = pixeldata.format_pixels(data, dtype="uint16")
+    assert (tags["Rows"], tags["Columns"]) == (3, 4)
+    assert raw == data.tobytes()
+    assert not set(tags) & set(utils.GEOMETRY_TAGS)
+
+    # explicit geometry is kept
+    ds = utils.make_dataset(data, ImagePositionPatient=[0, 0, 5], PixelSpacing=[0.8, 0.5])
+    assert list(ds.ImagePositionPatient) == [0, 0, 5]
+    assert list(ds.PixelSpacing) == [0.8, 0.5]
+
+
+def test_update_dataset_volume_geometry(oblique, legsfile):
+    stack, pixels, geo = oblique
+    volume = stack.as_volume(rescale=False).astype("uint16")
+    ref = pydicom.dcmread(legsfile)
+    ds = utils.update_dataset(ref, data=volume[:, :, 2:3])
+    expected = geo["origin"] + 2 * geo["dz"] * geo["N"]
+    assert np.allclose(list(ds.ImagePositionPatient), expected, atol=1e-6)
+    assert np.allclose(list(ds.PixelSpacing), [geo["dr"], geo["dc"]])
+
+
+def test_tomio_format_pixels(oblique):
+    tomio = pytest.importorskip("tomio")
+    stack, pixels, geo = oblique
+    vol = tomio.asvolume(stack.as_volume(rescale=False).astype("uint16"))
+    tags, raw = pixeldata.format_pixels(vol[:, :, 1:2], dtype="uint16")
+    expected = geo["origin"] + 1 * geo["dz"] * geo["N"]
+    assert np.allclose(tags["ImagePositionPatient"], expected, atol=1e-6)
     assert np.allclose(tags["PixelSpacing"], [geo["dr"], geo["dc"]])
-    assert (tags["Rows"], tags["Columns"]) == pixels[0].shape
+    assert np.allclose(tags["ImageOrientationPatient"], list(geo["X"]) + list(geo["Y"]), atol=1e-6)
+    assert (tags["Rows"], tags["Columns"]) == pixels[1].shape
+    assert raw == pixels[1].astype("uint16").tobytes()
+
+
+def test_tomio_asvolume(oblique):
+    """DicomVolume converted to tomio.volume.Volume keeps its geometry"""
+    tomio = pytest.importorskip("tomio")
+    stack, pixels, geo = oblique
+    volume = stack.as_volume(rescale=False)
+    vol = tomio.asvolume(volume)
+    assert isinstance(vol, tomio.Volume)
+    assert vol.shape == volume.shape
+    assert np.array_equal(np.asarray(vol), np.asarray(volume))
+    assert np.allclose(vol.spacing, volume.spacing)
+    assert np.allclose(vol.origin, volume.origin)
+    assert np.allclose(vol.transform, volume.transform)
+    assert vol.metadata == {}
+
+    # tomio's affine maps voxel indices to the DICOM (LPS) positions
+    rows, cols = pixels[0].shape
+    for i, j, k in [(0, 0, 0), (7, 11, 2), (cols - 1, rows - 1, 1)]:
+        expected = geo["origin"] + k * geo["dz"] * geo["N"]
+        expected = expected + i * geo["dc"] * geo["X"] + j * geo["dr"] * geo["Y"]
+        assert np.allclose(vol.get_coords((i, j, k)), expected, atol=1e-9)
 
 
 #

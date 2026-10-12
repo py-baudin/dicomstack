@@ -12,7 +12,11 @@
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.
-- Changed: `format_pixels` uses the geometry of `DicomVolume` slices.
+- Changed: `DicomVolume.metadata` is a dict of str; geometry moved to attributes.
+- Changed: `DicomVolume.tags` and `DicomVolume(tags=)` are deprecated.
+- Changed: `DicomVolume` slicing updates the geometry, as in tomio.
+- Changed: integer indexing of a `DicomVolume` spatial axis returns an ndarray.
+- Changed: `format_pixels` writes `(x, y[, 1])` volumes as `(rows, columns)`.
 
 ### Fixed
 - Fixed: `utils.write_dataset` failed with pydicom 2.x.
@@ -25,3 +29,5 @@
 - Fixed: importing dicomstack replaced `warnings.showwarning` globally.
 - Fixed: in-plane volume spacings were swapped for non-square pixels.
 - Fixed: `write_dataset` files lacked SOP UIDs and had invalid orientation.
+- Fixed: `format_pixels` ignored the geometry of volumes.
+- Fixed: `write_dataset` overwrote the geometry tags given by the caller.

@@ -109,38 +109,107 @@ def check_slice_spacing(frames, origin, ax3, spacing3, tol=1e-3, strict=False):
 if AVAILABLE:
 
     class DicomVolume(np.ndarray):
-        """simple layer over np ndarray to add metadata"""
+        """simple layer over np ndarray to add geometry and metadata
 
-        @property
-        def origin(self):
-            return self.metadata['origin']
-        
-        @property
-        def spacing(self):
-            return self.metadata['spacing']
-        
-        @property
-        def transform(self):
-            return self.metadata['transform']
-        
+        Same attributes as tomio.volume.Volume (`tomio.asvolume(vol)` converts it):
+            spacing: voxel size along each axis
+            origin: LPS coordinates of voxel (0, 0, 0)
+            transform: LPS direction of each axis (transform[i]: axis i)
+            metadata: dict of str
+        """
+
+        GEOMETRY = ("origin", "spacing", "transform")
+
         @property
         def tags(self):
-            return self.metadata
+            """geometry as a dict (deprecated: use origin, spacing, transform)"""
+            warnings.warn(
+                "DicomVolume.tags is deprecated: use origin, spacing and transform",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return {name: getattr(self, name) for name in self.GEOMETRY}
 
-        def __new__(cls, input_array, **metadata):
+        def __new__(
+            cls,
+            input_array,
+            *,
+            spacing=None,
+            origin=None,
+            transform=None,
+            metadata=None,
+            tags=None,
+        ):
             """create Volume object"""
-            # copy the data
             obj = np.asarray(input_array).view(cls)
-            if 'tags' in metadata:
-                # deprecated keyword `tags`
-                metadata.update(metadata.pop('tags'))
-            obj.metadata = dict(metadata)
+            if tags is not None:
+                warnings.warn(
+                    "DicomVolume(tags=...) is deprecated: "
+                    "use origin=, spacing= and transform=",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            geometry = dict(tags or {})
+            for name, value in zip(cls.GEOMETRY, (origin, spacing, transform)):
+                if value is not None:
+                    geometry[name] = value
+            obj.origin = geometry.get("origin")
+            obj.spacing = geometry.get("spacing")
+            obj.transform = geometry.get("transform")
+            obj.metadata = metadata
             return obj
+
+        @property
+        def metadata(self):
+            return self._metadata
+
+        @metadata.setter
+        def metadata(self, metadata):
+            metadata = metadata or {}
+            self._metadata = {str(key): str(value) for key, value in metadata.items()}
 
         def __array_finalize__(self, obj):
             if obj is None:
                 return
-            self.metadata = dict(getattr(obj, "metadata", {}))
+            for name in self.GEOMETRY:
+                setattr(self, name, getattr(obj, name, None))
+            self.metadata = getattr(obj, "metadata", None)
+
+        def has_geometry(self):
+            return all(getattr(self, name) is not None for name in self.GEOMETRY)
+
+        def __getitem__(self, key):
+            """geometry-aware slicing (as tomio.volume.Volume)
+
+            slices on the spatial axes (first 3): geometry updated
+            other indexing on the spatial axes (integer, array, None): plain ndarray
+            """
+            result = super().__getitem__(key)
+            if not isinstance(result, DicomVolume) or self.ndim < 3:
+                return result
+            slices = get_spatial_slices(key, self.ndim)
+            if slices is None:
+                return result.view(np.ndarray)
+            elif not self.has_geometry():
+                return result
+
+            starts, steps = [], []
+            for sl, size in zip(slices, self.shape[:3]):
+                start, _, step = sl.indices(size)
+                starts.append(start)
+                steps.append(step)
+            result.origin = tuple(
+                float(o + sum(i * s * t[d] for i, s, t in zip(starts, self.spacing, self.transform)))
+                for d, o in enumerate(self.origin)
+            )
+            result.spacing = tuple(
+                s * abs(step) for s, step in zip(self.spacing, steps)
+            ) + tuple(self.spacing[3:])
+            result.transform = tuple(
+                tuple(v * (1 if step > 0 else -1) for v in t)
+                for t, step in zip(self.transform, steps)
+            )
+            return result
 
         def __reduce__(self):
             """prevent pickling"""
@@ -154,30 +223,71 @@ if AVAILABLE:
             return super().__array_wrap__(out_arr, context, return_scalar)
 
 
+def get_geometry(data):
+    """(origin, spacing, transform) of a volume, or None"""
+    geometry = [getattr(data, name, None) for name in ("origin", "spacing", "transform")]
+    if any(value is None for value in geometry):
+        return None
+    return geometry
+
+
+def ds_value(value, digits=10):
+    """float fitting in a DICOM DS value (16 characters)"""
+    return float(f"{float(value):.{digits}g}")
+
+
+def get_spatial_slices(key, ndim):
+    """slices of the first 3 axes in key, or None if not all simple slices"""
+    key = key if isinstance(key, tuple) else (key,)
+    if any(k is None for k in key):
+        # new axes: axis numbers change
+        return None
+    ellipsis = [i for i, k in enumerate(key) if k is Ellipsis]
+    if len(ellipsis) > 1:
+        return None
+    elif ellipsis:
+        i = ellipsis[0]
+        key = key[:i] + (slice(None),) * (ndim - len(key) + 1) + key[i + 1 :]
+    key = key + (slice(None),) * (3 - len(key))
+    if not all(isinstance(k, slice) for k in key[:3]):
+        return None
+    return key[:3]
+
+
 @available
 def format_pixels(data, dtype="uint8"):
-    """make metadata from ndarray"""
+    """return DICOM tags and pixel bytes of a single image
+
+    data:
+        - a volume with geometry (DicomVolume, tomio.Volume) of shape (x, y) or (x, y, 1),
+            e.g. `vol[:, :, k:k+1]`: the image is written with rows along y and columns along x,
+            and its geometry sets PixelSpacing, ImagePositionPatient and ImageOrientationPatient
+        - or a 2d array (rows, columns) without geometry: no geometry tags
+    """
     tags = {}
-    # volume geometry (read before np.asarray, which drops the DicomVolume class)
-    volumetags = getattr(data, "tags", {})
+    geometry = get_geometry(data)
     data = np.asarray(data)
 
-    if data.ndim != 2:
-        raise ValueError("Invalid data shape: %s", data.shape)
+    if geometry:
+        if data.ndim == 3 and data.shape[2] == 1:
+            data = data[..., 0]
+        if data.ndim != 2:
+            raise ValueError("Invalid data shape: %s (expected (x, y) or (x, y, 1))" % (data.shape,))
+        # (x, y) -> (rows, columns)
+        data = data.T
+        origin, spacing, transform = geometry
+        tags["PixelSpacing"] = [ds_value(spacing[1]), ds_value(spacing[0])]
+        tags["ImagePositionPatient"] = [ds_value(v) for v in origin]
+        tags["ImageOrientationPatient"] = [
+            ds_value(v) for v in list(transform[0]) + list(transform[1])
+        ]
+    elif data.ndim != 2:
+        raise ValueError("Invalid data shape: %s" % (data.shape,))
 
     # shape
     rows, cols = data.shape
     tags["Rows"] = rows
     tags["Columns"] = cols
-
-    # geometry
-    origin = volumetags.get("origin", (0, 0, 0))
-    spacing = volumetags.get("spacing", (1, 1, 1))
-    transform = volumetags.get("transform", [(1, 0, 0), (0, 1, 0), (0, 0, 1)])
-    # data: (rows, columns), spacing: (column spacing, row spacing, ...) as in volumes
-    tags["PixelSpacing"] = [spacing[1], spacing[0]]
-    tags["ImagePositionPatient"] = list(origin)
-    tags["ImageOrientationPatient"] = list(transform[0]) + list(transform[1])
 
     # dynamics
     data_max = data.max()

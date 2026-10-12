@@ -298,19 +298,32 @@ def write_dataset(
     save_as(dataset, filename, enforce_file_format=True)
 
 
+GEOMETRY_TAGS = ["PixelSpacing", "ImagePositionPatient", "ImageOrientationPatient"]
+
+
 def update_dataset(dataset, data=None, dtype="uint16", **tags):
-    """update existing dataset"""
+    """update existing dataset
+
+    If data has a geometry (see pixeldata.format_pixels), it replaces the dataset's
+    """
     if data is None:
         data = dataset.PixelData
     newtags = {tag.keyword: dataset[tag.tag] for tag in dataset}
+    if pixeldata.get_geometry(data):
+        for name in GEOMETRY_TAGS:
+            newtags.pop(name, None)
     newtags.update(tags)
     return make_dataset(data, dtype=dtype, **newtags)
 
 
 def make_dataset(data, dtype="uint16", **tags):
-    """make valid DICOM dataset"""
-    # dataset = pydicom.Dataset()
+    """make valid DICOM dataset
+
+    data: pixel bytes, 2d array (rows, columns), or volume with geometry (see pixeldata.format_pixels)
+    tags: DICOM values (given geometry tags take precedence over data's geometry)
+    """
     dataset = pydicom.Dataset()
+    given = {name for name, value in tags.items() if value is not None}
 
     # date time
     LOGGER.debug("Setting dataset values.")
@@ -337,7 +350,7 @@ def make_dataset(data, dtype="uint16", **tags):
     default("SOPClassUID", pydicom.uid.MRImageStorage)
     default("SOPInstanceUID", generate_uid())
     # geometry
-    default("PixelSpacing", [1, 1])  # overwritten with data's metadata
+    default("PixelSpacing", [1, 1])  # overwritten with data's geometry
     default("SliceThickness", 1)
     default("ImageOrientationPatient", [1, 0, 0, 0, 1, 0])
     default("ImagePositionPatient", [0, 0, 0])
@@ -369,7 +382,8 @@ def make_dataset(data, dtype="uint16", **tags):
             _tags, data = pixeldata.format_pixels(data, dtype=dtype)
         except (NotImplementedError, TypeError):
             raise TypeError("data must be a bytes array")
-        tags.update(_tags)
+        # given geometry tags take precedence
+        tags.update({k: v for k, v in _tags.items() if not (k in GEOMETRY_TAGS and k in given)})
 
     # check some tags
     for tag in [
