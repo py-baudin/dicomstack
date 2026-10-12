@@ -28,6 +28,14 @@ class DuplicatedFramesError(Exception):
     """raise when duplicated frames are found"""
 
 
+class MultipleValuesError(ValueError):
+    """raise when several values are found where a single one is expected"""
+
+
+class NoValueError(ValueError):
+    """raise when no value is found where a single one is expected"""
+
+
 class DicomStack(object):
     """load, sort and filter DICOM images"""
 
@@ -163,12 +171,14 @@ class DicomStack(object):
         # fill tree using study ids
         for uid in sorted(studies):
             if studies[uid]:
-                id = studies[uid]
-            elif not tree:
-                id = 1
+                id = str(studies[uid])
             else:
-                id = max([int(i) for i in tree]) + 1
-            tree[str(id)] = uidtree[uid]
+                numeric = [int(i) for i in tree if i.isdigit()]
+                id = str(max(numeric, default=0) + 1)
+            if id in tree:
+                # several studies with the same StudyID
+                id = next(f"{id}-{n}" for n in itertools.count(2) if f"{id}-{n}" not in tree)
+            tree[id] = uidtree[uid]
 
         return tree
 
@@ -216,9 +226,9 @@ class DicomStack(object):
         values = set(values)
 
         if len(values) > 1:
-            raise ValueError("Multiple values found for %s" % fields)
+            raise MultipleValuesError("Multiple values found for %s" % (fields,))
         elif not values:
-            raise ValueError("No value found for %s" % fields)
+            raise NoValueError("No value found for %s" % (fields,))
         return values.pop()
 
     def unique(self, *fields):
@@ -293,7 +303,7 @@ class DicomStack(object):
         """reindex database using field values (skip frames with missing values)"""
         LOGGER.debug("Sort by fields: %s" % str(fields))
         frames = self._existing(fields)
-        sorted_frames = sorted(frames, key=lambda f: f.get(*fields))
+        sorted_frames = sorted(frames, key=lambda f: tuple(f[field] for field in fields))
         return self.from_frames(sorted_frames, root=self.root)
 
     def getaxis(self):
@@ -333,8 +343,12 @@ class DicomStack(object):
             return False
 
     @pixeldata.available
-    def as_volume(self, by=None, rescale=True, reorder=True):
-        """as volume"""
+    def as_volume(self, by=None, rescale=True, reorder=True, tol=1e-3, strict=False):
+        """as volume
+
+        tol: relative tolerance on the uniformity of the slice spacing
+        strict: if True, raise ValueError on non-uniform slice spacing (else warn)
+        """
         LOGGER.debug("Make volume (use fields: %s)" % str(by))
 
         if len(self) == 0:
@@ -351,7 +365,9 @@ class DicomStack(object):
                 # sort by location
                 stack = stack.reorder()
             # single non-indexed volume
-            return pixeldata.make_volume(stack.frames, rescale=rescale)
+            return pixeldata.make_volume(
+                stack.frames, rescale=rescale, tol=tol, strict=strict
+            )
 
         # else: indexed volumes
 
@@ -385,7 +401,9 @@ class DicomStack(object):
                 # sort by location
                 substack = substack.reorder()
 
-            volume = pixeldata.make_volume(substack.frames, rescale=rescale)
+            volume = pixeldata.make_volume(
+                substack.frames, rescale=rescale, tol=tol, strict=strict
+            )
             volumes.append(volume)
         return indices, volumes
 
@@ -434,15 +452,29 @@ class DicomStack(object):
 
     def _load_files(self, filenames, duplicates):
         """load filenames"""
+        # group zip members by archive (each archive is opened once)
+        items = []  # filename, or zip path
+        archives = {}  # zip path: (first filename, [selected members])
         for filename in filenames:
             # skip DICOMDIR
             if str(filename).endswith("DICOMDIR"):
                 continue
-            zip_path = get_zip_path(filename)
-            if zip_path:
-                self._load_zipfile(filename)
+            filepath = self._filepath(filename)
+            zip_path = get_zip_path(filepath)
+            if not zip_path:
+                items.append(filename)
+                continue
+            if not zip_path in archives:
+                archives[zip_path] = (filename, [])
+                items.append(zip_path)
+            member = filepath[len(zip_path) :].replace("\\", "/").strip("/")
+            archives[zip_path][1].append(member)
+
+        for item in items:
+            if item in archives:
+                self._load_zipfile(item, *archives[item])
             else:
-                self._load_file(filename)
+                self._load_file(item)
 
         # duplicates
         unique_frames = set(self.frames)
@@ -462,13 +494,15 @@ class DicomStack(object):
                     if not (frame in duplicated or duplicated.add(frame))
                 ]
 
+    def _filepath(self, filename):
+        """full path of filename"""
+        if self.root:
+            return os.path.join(self.root, filename)
+        return str(filename)
+
     def _load_file(self, filename):
         """load single Dicom file"""
-        root = self.root
-        if root:
-            filepath = os.path.join(root, filename)
-        else:
-            filepath = str(filename)
+        filepath = self._filepath(filename)
 
         try:
             # read dicom object
@@ -480,17 +514,22 @@ class DicomStack(object):
         else:
             self.frames.extend(frames)
 
-    def _load_zipfile(self, filename):
-        """load files in zipfile"""
-        root = self.root
-        if root:
-            filepath = os.path.join(root, filename)
-        else:
-            filepath = str(filename)
+    def _load_zipfile(self, zip_path, filename, members):
+        """load files in zipfile
 
-        zip_path = get_zip_path(filepath)
+        zip_path: path to the zip file
+        filename: (first) filename designating the zip file
+        members: selected members or folders in the zip file ("": all)
+        """
         if not zipfile.is_zipfile(zip_path):
             self.non_dicom.append(filename)
+            return
+
+        def selected(member):
+            return any(
+                not sel or member == sel or member.startswith(sel + "/")
+                for sel in members
+            )
 
         with zipfile.ZipFile(zip_path, "r") as zf:
             for zfile in zf.filelist:
@@ -501,10 +540,10 @@ class DicomStack(object):
                 elif "DICOMDIR" in zfile.filename:
                     # skip DICOMDIR for now
                     continue
+                elif not selected(zfile.filename.strip("/")):
+                    continue
                 zfilename = os.path.normpath(zfile.filename)
                 full_zfilename = os.path.join(zip_path, zfilename)
-                if not filename in full_zfilename:
-                    continue
 
                 try:
                     # read dicom object
@@ -539,17 +578,25 @@ def describe(dicomtree, regex=None):
         if not study_description:
             study_description = "(no study description)"
         print(f"{study_id}: {study_description}", file=info)
-        for seriesnumber in sorted([int(v) for v in study]):
-            frames = study[str(seriesnumber)]
+        for seriesnumber in sorted(study, key=_series_key):
+            frames = study[seriesnumber]
             len_series = len(frames)
             series_description = frames[0]["SeriesDescription"]
-            if regex and not re.search(regex, series_description):
+            if regex and not re.search(regex, str(series_description)):
                 # skip
                 continue
             desc = f"{series_description} (n={len_series})"
             print(f"\t{seriesnumber}: {desc}", file=info)
 
     return info.getvalue()
+
+
+def _series_key(seriesnumber):
+    """sort key for series numbers: numeric first, then others"""
+    try:
+        return (0, int(seriesnumber), "")
+    except ValueError:
+        return (1, 0, seriesnumber)
 
 
 class DicomFile:
@@ -1043,11 +1090,17 @@ def parse_keys(string):
 
 
 def get_zip_path(path):
-    """return the zip-file root of path"""
+    """return the zip-file root of path
+
+    The zip file is the first path component ending with ".zip" (any case)
+    which is not an existing directory.
+    """
     path = str(path)
-    if not ".zip" in path:
-        return None
-    return path[: path.find(".zip") + 4]
+    for match in re.finditer(r"\.zip(?=[\\/]|$)", path, flags=re.IGNORECASE):
+        zip_path = path[: match.end()]
+        if not os.path.isdir(zip_path):
+            return zip_path
+    return None
 
 
 def list_files(pathes):
