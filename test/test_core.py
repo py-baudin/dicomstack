@@ -107,6 +107,79 @@ def test_dicom_selector_lazy():
 
 
 #
+# deferred private values
+
+
+def deferred_tags(header):
+    from pydicom.dataelem import RawDataElement
+
+    return [
+        tag for tag in header.keys()
+        if isinstance(header.get_item(tag, keep_deferred=True), RawDataElement)
+        and header.get_item(tag, keep_deferred=True).value is None
+    ]
+
+
+def test_private_values_deferred(legsfile, monkeypatch):
+    frame = DicomStack(legsfile).frames[0]
+    header = frame.dicomfile.dataset
+    deferred = deferred_tags(header)
+    private = [tag for tag in header.keys() if tag.is_private and not tag.is_private_creator]
+    assert deferred and set(deferred) == set(private)  # private creators are kept
+
+    # "[Name]" lookups do not read the deferred values
+    reads = []
+    import pydicom.filereader
+
+    read = pydicom.filereader.read_deferred_data_element
+    monkeypatch.setattr(
+        pydicom.filereader, "read_deferred_data_element",
+        lambda *args: reads.append(args[-1].tag) or read(*args),
+    )
+    with pytest.raises(KeyError):
+        frame["[UnknownPrivateName]"]
+    assert "[CSAImageHeaderType]" in frame.keywords()
+    assert reads == []
+
+    # values read on access, same as without deferral
+    full = DicomFile(legsfile, defer_private=False)
+    full.dataset
+    reference = full.frames[0]
+    for key in ["[CSAImageHeaderType]", "[TablePositionOrigin]", "[CSAImageHeaderInfo]"]:
+        assert frame[key] == reference[key]
+    assert len(reads) == 3
+    assert len(deferred_tags(header)) == len(deferred) - 3
+    # full conversion (sequences: lists of DicomDataset, compared by their elements' values)
+    def values(element):
+        if element.sequence:
+            return [[e.value for e in item.elements if not e.sequence] for item in element.value]
+        return element.value
+
+    keywords = frame.dataset.elements_by_keyword
+    expected = reference.dataset.elements_by_keyword
+    assert set(keywords) == set(expected)
+    assert all(values(keywords[k]) == values(v) for k, v in expected.items())
+
+
+def test_private_values_not_deferred(tmp_path, legsfile):
+    # zip members: no file to read them from
+    with zipfile.ZipFile(tmp_path / "a.zip", "w") as zf:
+        zf.write(legsfile, "LEGS.DCM")
+    header = DicomStack(tmp_path / "a.zip").frames[0].dicomfile.dataset
+    assert deferred_tags(header) == []
+    # cache: values cached, then deferred
+    stack = DicomStack(legsfile, cache=str(tmp_path / "cache.json.gz"))
+    assert deferred_tags(stack.frames[0].dicomfile.dataset)
+    stack = DicomStack(legsfile, cache=str(tmp_path / "cache.json.gz"))
+    assert stack.frames[0]["[CSAImageHeaderType]"] == "IMAGE NUM 4"
+
+
+def test_private_values_pickle(legsfile):
+    stack = pickle.loads(pickle.dumps(DicomStack(legsfile)))
+    assert stack.frames[0]["[CSAImageHeaderType]"] == "IMAGE NUM 4"
+
+
+#
 # duplicates
 
 

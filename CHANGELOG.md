@@ -25,6 +25,7 @@
 - Changed: duplicates detected by SOPInstanceUID (`dedup="content"`: old way).
 - Changed: file bytes are no longer kept in memory; fields converted on access.
 - Changed: uncompressed pixel data is read directly from the files.
+- Changed: private values are read from the file when accessed (less memory).
 - Changed: `regex()` matches anywhere in the value (`re.search`); `^` anchors.
 - Changed: queries are evaluated without `eval`.
 - Changed: `repr(stack)` shows frames, studies and series.

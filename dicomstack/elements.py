@@ -277,6 +277,26 @@ def element_keyword(element):
     return keyword
 
 
+def private_keyword(dataset, tag):
+    """automatic keyword of private element `tag` of dataset, without reading its value
+
+    Same as element_keyword(dataset[tag]): the name comes from the private dictionary,
+    with the element's private creator (as pydicom's DataElement.name)
+    """
+    tag = pydicom.tag.Tag(tag)
+    creator_tag = pydicom.tag.Tag(tag.group, tag.element >> 8)
+    if tag == creator_tag or not creator_tag in dataset:
+        return ""
+    creator = dataset[creator_tag].value
+    if not creator:
+        return ""
+    try:
+        name = pydicom.datadict.private_dictionary_description(tag, creator)
+    except KeyError:
+        return ""
+    return re.sub(r"[^\w\[\]]|_", "", f"[{name}]")
+
+
 def parse_keys(string):
     """parse string with optional index suffix
     syntax: "txt" or "txt_num"
@@ -379,7 +399,9 @@ class DatasetLookup:
             for tag in self._tags():
                 if tag.group % 2 == 0 or tag in self.exclude:
                     continue
-                keyword = element_keyword(self.by_tag(tag))
+                # (value not read: private values can be deferred)
+                in_dataset = tag in self.dataset or self.meta is None
+                keyword = private_keyword(self.dataset if in_dataset else self.meta, tag)
                 if keyword:
                     self._private[keyword] = tag
         return self._private
@@ -467,7 +489,11 @@ class FileLookup:
                 items = shared
             elif self.multiframe and tag == PER_FRAME_GROUPS:
                 items = per_frame[index] if index is not None and per_frame else []
-            elif raw and not tag.is_private:
+            elif raw and tag.is_private:
+                # (private values can be deferred: not read)
+                yield self.header.get_item(tag, keep_deferred=True), private_keyword(self.header, tag)
+                continue
+            elif raw:
                 # as DataElement.keyword: dictionary keyword, "" for repeating groups
                 keyword = (
                     pydicom.datadict.dictionary_keyword(tag)
@@ -477,7 +503,6 @@ class FileLookup:
                 yield self.header.get_item(tag), keyword
                 continue
             else:
-                # (private elements: the automatic keyword needs the converted element)
                 items = [self.header[tag]]
             for element in items:
                 yield element, element_keyword(element)

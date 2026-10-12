@@ -56,7 +56,7 @@ multi = DicomStack("multiframe.dcm")
 print(multi)                                  # -> DICOM(90 frames | 1 study | 1 series)
 ```
 
-Loading reads the files' headers only; field values are converted when accessed, and pixels are read when needed. A progress bar is shown while loading when the output is a terminal (`progress=False` to hide it, `True` to always show it, or a function `progress(done, total)`).
+Loading reads the files' headers only; field values are converted when accessed, and pixels are read when needed. The values of private fields are not kept in memory: they are read again from the file when accessed (except for zip members). A progress bar is shown while loading when the output is a terminal (`progress=False` to hide it, `True` to always show it, or a function `progress(done, total)`).
 
 **Duplicates.** Frames are identified by their `SOPInstanceUID` (and frame index): the same image loaded twice (two copies of a file, overlapping paths) appears once. `duplicates="error"` raises `DuplicatedFramesError` instead, `duplicates="ignore"` keeps them. `dedup="content"` compares whole file contents instead of UIDs (slower: whole files are read); files without `SOPInstanceUID` are never merged.
 

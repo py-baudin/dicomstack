@@ -222,6 +222,23 @@ def test_path_inside_zip(folder, tmp_path):
         DicomStack(tmp_path / "b.zip" / "s1")
 
 
+def test_gc_restored(folder):
+    import gc
+
+    assert gc.isenabled()
+    DicomStack(folder)
+    assert gc.isenabled()
+    gc.disable()
+    try:
+        DicomStack(folder)
+        assert not gc.isenabled()  # left as it was
+    finally:
+        gc.enable()
+    with pytest.raises(FileNotFoundError):
+        DicomStack(folder / "missing")
+    assert gc.isenabled()
+
+
 def test_progress(folder):
     calls = []
     DicomStack(folder, progress=lambda done, total: calls.append((done, total)))

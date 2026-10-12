@@ -1,6 +1,7 @@
 """ DICOM files and frames: reading headers and pixels, loading folders and zip files """
 
 import os
+import gc
 import sys
 import copy
 import fnmatch
@@ -18,6 +19,7 @@ from io import BytesIO
 
 import pydicom
 from pydicom import config
+from pydicom.dataelem import RawDataElement
 
 from . import pixeldata, cache
 from .elements import (
@@ -56,7 +58,21 @@ class Loader:
         self.non_dicom = []
 
     def load(self, filenames):
-        """load filenames: returns frames, non-DICOM files"""
+        """load filenames: returns frames, non-DICOM files
+
+        The garbage collector is paused while loading: the headers kept in memory create
+        many objects, which full collections would scan repeatedly (no reference cycles
+        are created here).
+        """
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            return self._load(filenames)
+        finally:
+            if enabled:
+                gc.enable()
+
+    def _load(self, filenames):
         # header cache
         cache_paths = cache.locations(self.root, self._cache) if self._cache else []
         if self._cache and not cache_paths:
@@ -175,8 +191,11 @@ class Loader:
         try:
             if isinstance(data, Exception):
                 raise data
-            # read dicom object
-            dicomfile = DicomFile(filepath, bytes=data, dedup=self._dedup)
+            # read dicom object (private values deferred after building the cache entry)
+            caching = self._cache_new is not None
+            dicomfile = DicomFile(
+                filepath, bytes=data, dedup=self._dedup, defer_private=not caching
+            )
             frames = dicomfile.frames
         except (IOError, InvalidDicomError):
             # other files
@@ -185,6 +204,7 @@ class Loader:
         else:
             self.frames.extend(frames)
             self._cache_add(self._cache_key(filename), stat, dicomfile)
+            dicomfile.defer_private_values()
 
     def _load_zipfile(self, zip_path, filename, members):
         """load files in zipfile
@@ -273,18 +293,31 @@ class DicomFile:
     _cache = None  # cache entry (header cache)
     _memory = None  # in-memory pydicom dataset (from_dataset)
 
-    def __init__(self, filename, bytes=None, *, source=None, dedup="uid"):
+    def __init__(self, filename, bytes=None, *, source=None, dedup="uid", defer_private=True):
         """init DicomFile object (the header is read on demand)
 
         bytes: contents of the file (e.g. zip member), read now but not kept
+        defer_private: private values are not kept in memory: read from the file when
+            accessed (regular files only; see defer_private_values)
         """
         self.filename = filename
         self.source = str(filename) if source is None else source
         self.dedup = check_dedup(dedup)
         self.digest = None
         self.pixel_offset = None
+        self._defer_private = defer_private
         if bytes is not None:
             self._read_header(bytes)
+
+    def defer_private_values(self):
+        """drop the values of the private elements of the header (read again when accessed)
+
+        Only for regular files whose header was parsed from the file's own bytes
+        (not zip members, deflated files, or files completed with a sequence delimiter).
+        """
+        if self._dataset is None or self.pixel_offset is None or not isinstance(self.source, str):
+            return
+        defer_private(self._dataset, self.source)
 
     @classmethod
     def from_cache(cls, filename, entry, *, source=None, dedup="uid"):
@@ -464,6 +497,8 @@ class DicomFile:
         self.pixel_offset = None if isinstance(self.source, tuple) else offset
         if self.dedup == "content":
             self.digest = hashlib.blake2b(data, digest_size=16).digest()
+        if self._defer_private:
+            self.defer_private_values()
 
     def _read(self, stop_before_pixels=True):
         """read source, return pydicom dataset and offset of the pixel data element"""
@@ -602,6 +637,28 @@ def read_dataset(data, stop_before_pixels=True):
         # the offset is not a position in the file
         offset = None
     return dataset, offset
+
+
+def defer_private(dataset, path):
+    """drop the values of the top-level private elements of dataset, except private creators
+
+    On access, pydicom reads a deferred value (raw element without value) from the file
+    `path`, at the position recorded when parsing (the dataset must have been parsed
+    from the whole file's bytes).
+    """
+    deferred = 0
+    for tag in list(dataset.keys()):
+        if not tag.is_private or tag.is_private_creator:
+            continue
+        raw = dataset.get_item(tag, keep_deferred=True)
+        if isinstance(raw, RawDataElement) and raw.value is not None and raw.length:
+            # (Dataset.__setitem__ would convert private elements: set the raw element)
+            dataset._dict[tag] = raw._replace(value=None)
+            deferred += 1
+    if deferred:
+        dataset.filename = path
+        dataset.fileobj_type = open
+        dataset.timestamp = os.stat(path).st_mtime  # pydicom warns if the file changed
 
 
 def check_dedup(dedup):

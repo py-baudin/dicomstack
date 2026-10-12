@@ -31,7 +31,10 @@ def decode_pixels(header, data):
         BytesIO(data), syntax.is_implicit_VR, syntax.is_little_endian
     )
     dataset = pydicom.Dataset()
-    dataset.update(header)
+    for tag in header.keys():
+        # (public elements only: private values may be deferred)
+        if not tag.is_private:
+            dataset[tag] = header.get_item(tag)
     dataset.update(elements)
     dataset.file_meta = header.file_meta
     return dataset.pixel_array
