@@ -14,14 +14,21 @@ stack(stack.Field.Subfield == "value")
 ==, !=, <, <=, >, >=
 
 # methods:
-.is_in() (alias: .isin()), .not_in(), .is_null(), .contains(), .intersect(), .subset(),
-.superset(), .startswith(), .endswith(), .regex() (re.match), .apply()
+.is_in() (alias: .isin()), .not_in(), .between(lo, hi) (inclusive),
+.isclose(value, tol=1e-6), .exists(), .is_null(), .contains(), .intersect(),
+.subset(), .superset(), .startswith(), .endswith(),
+.regex(pattern) (re.search: matches anywhere; use "^" to anchor), .apply(function)
 
 # combine/modify queries with &, |, ~
 
+# errors
+A comparison raising TypeError or AttributeError (e.g. `DICOM.SeriesNumber > "1"`, or a
+missing value compared with `<`) excludes the frame with a warning;
+`stack(query, strict=True)` raises instead.
 """
 
 import re
+import math
 from typing import Any
 import warnings
 
@@ -42,17 +49,17 @@ class Selector:
         return Selector(*(self.keys + (index,)))
 
     def __getattr__(self, name: str) -> "Selector":
-        try:
-            getattr(super(), name)
-        except AttributeError:
-            return Selector(*(self.keys + (name,)))
+        if name.startswith("__"):
+            # special attributes (copy, pickle, numpy...) are not DICOM fields
+            raise AttributeError(name)
+        return Selector(*(self.keys + (name,)))
 
     def __iter__(self):
         raise NotImplementedError()
 
     def __eq__(self, value: Any) -> "Query":
         return Query.from_selector(self, "equal", value)
-    
+
     def __contains__(self, value: Any) -> "Query":
         return Query.from_selector(self, "contains", value)
 
@@ -80,6 +87,18 @@ class Selector:
     def not_in(self, value: Any) -> "Query":
         return Query.from_selector(self, "not-in", value)
 
+    def between(self, low: Any, high: Any) -> "Query":
+        """low <= value <= high"""
+        return Query.from_selector(self, "between", (low, high))
+
+    def isclose(self, value: Any, tol: float = 1e-6) -> "Query":
+        """|value - reference| <= tol (absolute tolerance), element-wise for tuples"""
+        return Query.from_selector(self, "is-close", (value, tol))
+
+    def exists(self) -> "Query":
+        """the field exists and is not empty (same as ~is_null())"""
+        return Query.from_selector(self, "exists")
+
     def contains(self, value: Any) -> "Query":
         return Query.from_selector(self, "contains", value)
 
@@ -102,128 +121,148 @@ class Selector:
         return Query.from_selector(self, "ends-with", value)
 
     def regex(self, value: Any) -> "Query":
+        """re.search: the pattern can match anywhere in the value (use "^" to anchor it)"""
         return Query.from_selector(self, "regex", value)
 
     def apply(self, expr: Any) -> "Query":
         return Query.from_selector(self, "apply", expr)
 
 
+def is_close(value, reference, tol):
+    if isinstance(reference, (tuple, list)):
+        return len(value) == len(reference) and all(
+            is_close(v, r, tol) for v, r in zip(value, reference)
+        )
+    return math.fabs(value - reference) <= tol
+
+
+# comparison operators: (field's value, query value) -> result
+OPERATORS = {
+    "is-null": lambda value, _: value is None,
+    "exists": lambda value, _: value is not None,
+    "equal": lambda value, ref: value == ref,
+    "not-equal": lambda value, ref: value != ref,
+    "less-than": lambda value, ref: value < ref,
+    "greater-than": lambda value, ref: value > ref,
+    "less-or-equal": lambda value, ref: value <= ref,
+    "greater-or-equal": lambda value, ref: value >= ref,
+    "between": lambda value, ref: ref[0] <= value <= ref[1],
+    "is-close": lambda value, ref: is_close(value, ref[0], ref[1]),
+    "is-in": lambda value, ref: value in ref,
+    "not-in": lambda value, ref: not value in ref,
+    "contains": lambda value, ref: ref in value,
+    "intersect": lambda value, ref: bool(set(value) & set(ref)),
+    "subset": lambda value, ref: bool(set(value) <= set(ref)),
+    "superset": lambda value, ref: bool(set(value) >= set(ref)),
+    "starts-with": lambda value, ref: value.startswith(ref),
+    "ends-with": lambda value, ref: value.endswith(ref),
+    "regex": lambda value, ref: re.search(ref, value) is not None,
+    "apply": lambda value, ref: ref(value),
+}
+
+
 class Query:
-    """Store a query or a combination of queries"""
+    """Store a query or a combination of queries
 
-    def __init__(self, expr=True, data=None):
-        self.expr = expr if isinstance(expr, str) else bool(expr)
-        self.data = data if data else {}
+    A tree of nodes: ("const", bool), ("compare", selector, op, value),
+    ("and", query, query), ("or", query, query), ("not", query).
+    Query(True) passes all frames, Query(False) none.
+    """
 
-    def __repr__(self):
-        if self.expr is True:
-            return "All"
-        elif self.expr is False:
-            return "None"
-        expr = self.expr
-        for id, data in self.data.items():
-            expr = expr.replace(id + "()", data["repr"])
-        return expr
+    def __init__(self, expr=True):
+        self.node = ("const", bool(expr))
 
-    # @classmethod
-    # def from_string(self, string) -> "Query":
+    @classmethod
+    def _make(cls, *node):
+        query = cls.__new__(cls)
+        query.node = node
+        return query
 
     @classmethod
     def from_selector(cls, selector, op, value=None) -> "Query":
-        id = f"__{abs(hash(str(selector.keys) + str(op) + str(value)))}__"
-        repr = f"{'.'.join([str(k) for k in selector.keys])}<{op}>{value}"
-        expr = f"{id}()"
-        data = {id: {"selector": selector, "op": op, "value": value, "repr": repr}}
-        return cls(expr, data)
-
-    def compare(self, op: str, value1: Any, value2: Any) -> bool:
-        if op == "is-null":
-            if value1 is None:
-                return True
-            return False
-
-        elif op == "equal":
-            return value1 == value2
-        elif op == "not-equal":
-            return value1 != value2
-        elif op == "less-than":
-            return value1 < value2
-        elif op == "greater-than":
-            return value1 > value2
-        elif op == "less-or-equal":
-            return value1 <= value2
-        elif op == "greater-or-equal":
-            return value1 >= value2
-        elif op == "is-in":
-            return value1 in value2
-        elif op == "not-in":
-            return not value1 in value2
-        elif op == "contains":
-            return value2 in value1
-        elif op == "intersect":
-            return bool(set(value1) & set(value2))
-        elif op == "subset":
-            return bool(set(value1) <= set(value2))
-        elif op == "superset":
-            return bool(set(value1) >= set(value2))
-        elif op == "starts-with":
-            return value1.startswith(value2)
-        elif op == "ends-with":
-            return value1.endswith(value2)
-        elif op == "regex":
-            return re.match(value2, value1) is not None
-        elif op == "apply":
-            return value2(value1)
-        else:
+        if not op in OPERATORS:
             raise ValueError(f"Unknown operator: {op}")
+        return cls._make("compare", selector, op, value)
 
-    def execute(self, getter):
-        """execute query, return boolean value"""
-        if self.expr is True:  # pass all
-            return True
-        elif self.expr is False:  # pass none
-            return False
+    @property
+    def constant(self):
+        """True or False for constant queries (All, None), else None"""
+        return self.node[1] if self.node[0] == "const" else None
 
-        def get_callback(getter, data):
-            def callback():
-                try:
-                    return self.compare(data["op"], getter(data["selector"]), data["value"])
-                except (TypeError, AttributeError) as exc:
-                    warnings.warn(f'`{data["selector"]}{data["op"]}({data["value"]})` returned error: {exc}')
-                    return False
+    def __repr__(self):
+        kind = self.node[0]
+        if kind == "const":
+            return "All" if self.node[1] else "None"
+        elif kind == "compare":
+            _, selector, op, value = self.node
+            return f"{'.'.join([str(k) for k in selector.keys])}<{op}>{value}"
+        elif kind == "not":
+            return f"not ({self.node[1]!r})"
+        return f"({self.node[1]!r}) {kind} ({self.node[2]!r})"
 
-            return callback
+    @staticmethod
+    def compare(op: str, value1: Any, value2: Any) -> bool:
+        """compare a field's value (value1) with a query value (value2)"""
+        try:
+            operator = OPERATORS[op]
+        except KeyError:
+            raise ValueError(f"Unknown operator: {op}")
+        return operator(value1, value2)
 
-        callbacks = {id: get_callback(getter, data) for id, data in self.data.items()}
-        return eval(self.expr, {}, callbacks)
+    def execute(self, getter, strict=False):
+        """execute query, return boolean value
 
-    def __call__(self, *args):
+        getter: function returning a field's value for a Selector (e.g. frame.get)
+        strict: raise errors of the comparisons (else: warn and return False)
+        """
+        kind = self.node[0]
+        if kind == "const":
+            return self.node[1]
+        elif kind == "compare":
+            _, selector, op, value = self.node
+            try:
+                return OPERATORS[op](getter(selector), value)
+            except (TypeError, AttributeError) as exc:
+                if strict:
+                    raise
+                from .pixeldata import external_stacklevel  # (numpy import)
+
+                warnings.warn(
+                    f"`{selector}{op}({value})` returned error: {exc}",
+                    stacklevel=external_stacklevel(),
+                )
+                return False
+        elif kind == "and":
+            return self.node[1].execute(getter, strict) and self.node[2].execute(getter, strict)
+        elif kind == "or":
+            return self.node[1].execute(getter, strict) or self.node[2].execute(getter, strict)
+        elif kind == "not":
+            return not self.node[1].execute(getter, strict)
+        raise ValueError(f"Invalid query node: {kind}")
+
+    def __call__(self, *args, **kwargs):
         """short for execute"""
-        return self.execute(*args)
+        return self.execute(*args, **kwargs)
 
     def __and__(self, other: "Query") -> "Query":
-        if self.expr is True:
+        if self.constant is True:
             return other
-        elif other.expr is True:
+        elif other.constant is True:
             return self
-        elif self.expr is False or other.expr is False:
+        elif self.constant is False or other.constant is False:
             return Query(False)
-        expr = f"({self.expr}) and ({other.expr})"
-        data = {**self.data, **other.data}
-        return Query(expr, data)
+        return Query._make("and", self, other)
 
     def __or__(self, other: "Query") -> "Query":
-        if self.expr is False:
+        if self.constant is False:
             return other
-        elif other.expr is False:
+        elif other.constant is False:
             return self
-        elif self.expr is True or other.expr is True:
+        elif self.constant is True or other.constant is True:
             return Query(True)
-        expr = f"({self.expr}) or ({other.expr})"
-        data = {**self.data, **other.data}
-        return Query(expr, data)
+        return Query._make("or", self, other)
 
     def __invert__(self) -> "Query":
-        if isinstance(self.expr, bool):
-            return Query(not self.expr)
-        return Query(f"not ({self.expr})", self.data)
+        if self.constant is not None:
+            return Query(not self.constant)
+        return Query._make("not", self)

@@ -40,26 +40,32 @@ class DicomTag:
     def __hash__(self):
         return hash((self.group, self.element))
 
+    def __int__(self):
+        return (self.group << 16) | self.element
+
     @classmethod
     def is_tag(cls, obj):
-        if isinstance(obj, cls):
-            return True
-        elif not isinstance(obj, tuple):
-            return False
-        try:
-            cls(*obj)
-        except (ValueError, TypeError):
-            return False
-        return True
+        return as_tag(obj) is not None
+
+
+def as_tag(key):
+    """DicomTag of a tag key (DicomTag or (group, element) tuple), or None"""
+    if isinstance(key, DicomTag):
+        return key
+    elif not isinstance(key, tuple):
+        return None
+    try:
+        return DicomTag(*key)
+    except (ValueError, TypeError):
+        return None
 
 
 class DicomTagSelector:
     """DICOM.Keyword, DICOM["[Private Name]"], DICOM[(group, element)]: query selectors"""
 
     def __getitem__(self, sel):
-        if DicomTag.is_tag(sel):
-            return Selector(DicomTag(*sel))
-        return Selector(sel)
+        tag = as_tag(sel)
+        return Selector(sel if tag is None else tag)
 
     def __getattr__(self, sel):
         if sel.startswith("__"):
@@ -191,11 +197,9 @@ class DicomDataset:
 
     def __getitem__(self, key):
         """get element"""
-        item = None
-
-        if DicomTag.is_tag(key):
+        tag = as_tag(key)
+        if tag is not None:
             # get value by tag
-            tag = DicomTag(*key)
             element = self.elements_by_tag[tag]
 
         elif isinstance(key, str):
@@ -362,9 +366,9 @@ class DatasetLookup:
 
     def find(self, key):
         """pydicom element for key (tag, keyword or "[Name]")"""
-        if DicomTag.is_tag(key):
-            tag = DicomTag(*key)
-            element = self.by_tag((tag.group << 16) | tag.element)
+        tag = as_tag(key)
+        if tag is not None:
+            element = self.by_tag(int(tag))
             if element is None:
                 raise KeyError(tag)
             return element
@@ -430,9 +434,9 @@ class FileLookup:
         if not self.multiframe:
             return self.top.find(key)
 
-        if DicomTag.is_tag(key):
-            tag = DicomTag(*key)
-            group_key = (tag.group << 16) | tag.element
+        tag = as_tag(key)
+        if tag is not None:
+            group_key = int(tag)
         elif isinstance(key, str):
             group_key = key
         else:

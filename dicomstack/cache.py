@@ -21,7 +21,7 @@ import importlib.metadata
 
 import pydicom
 
-from .elements import DicomTag, parse_element_value
+from .elements import as_tag, parse_element_value
 
 LOGGER = logging.getLogger(__name__)
 
@@ -207,8 +207,8 @@ def get_cached_value(cached, keys):
     raises KeyError for missing elements (the cache lists all elements)
     """
     key = keys[0]
-    if DicomTag.is_tag(key):
-        tag = DicomTag(*key)
+    tag = as_tag(key)
+    if tag is not None:
         tag_key = f"{tag.group:04x},{tag.element:04x}"
     elif isinstance(key, str):
         tag_key = cached["k"].get(key)

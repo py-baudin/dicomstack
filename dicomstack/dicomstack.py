@@ -107,7 +107,7 @@ class DicomStack(object):
             return
 
         # load dicom files
-        LOGGER.info("New DICOM stack (from %s files)" % len(filenames))
+        LOGGER.info("New DICOM stack (from %s files)", len(filenames))
         self._load_files(filenames, duplicates)
 
     @classmethod
@@ -224,10 +224,13 @@ class DicomStack(object):
         """method for self description"""
         return describe(self.dicomtree, **kwargs)
 
-    def __call__(self, query=None, **filters):
-        """short for filter_by_field or filter_by_query"""
+    def __call__(self, query=None, *, strict=False, **filters):
+        """short for filter_by_field or filter_by_query
+
+        strict: (queries) raise the errors of comparisons instead of excluding the frames
+        """
         if query is not None:
-            return self.filter_by_query(query)
+            return self.filter_by_query(query, strict=strict)
         return self.filter_by_field(**filters)
 
     def __getitem__(self, items):
@@ -275,20 +278,24 @@ class DicomStack(object):
 
     def filter_by_field(self, **filters):
         """return a sub stack with matching values for the given field"""
-        LOGGER.debug("Filter by fields: %s" % str(filters))
+        LOGGER.debug("Filter by fields: %s", filters)
         frames = self._filter(filters)
         return self.from_frames(frames, root=self.root)
 
-    def filter_by_query(self, query):
-        """return a sub stack with from frames with validated queries"""
-        LOGGER.debug("Filter by query: %s" % str(query))
-        frames = self._query(query)
+    def filter_by_query(self, query, strict=False):
+        """return a sub stack with from frames with validated queries
+
+        strict: raise the errors of comparisons (TypeError, AttributeError, e.g. comparing
+            a number with a string) instead of excluding the frames with a warning
+        """
+        LOGGER.debug("Filter by query: %s", query)
+        frames = [frame for frame in self.frames if query.execute(frame.get, strict=strict)]
         return self.from_frames(frames, root=self.root)
 
     def get_field_values(self, field, *fields, ignore_missing=False):
         """return a list a values for the given fields"""
         _fields = (field,) + fields
-        LOGGER.debug("Get fields' values: %s" % str(_fields))
+        LOGGER.debug("Get fields' values: %s", _fields)
 
         if ignore_missing:
             # skip missing values
@@ -342,7 +349,7 @@ class DicomStack(object):
 
     def sort(self, *fields):
         """reindex database using field values (skip frames with missing values)"""
-        LOGGER.debug("Sort by fields: %s" % str(fields))
+        LOGGER.debug("Sort by fields: %s", fields)
         frames = self._existing(fields)
         sorted_frames = sorted(frames, key=lambda f: tuple(f[field] for field in fields))
         return self.from_frames(sorted_frames, root=self.root)
@@ -374,14 +381,8 @@ class DicomStack(object):
 
     def has_field(self, field, how="all"):
         """return True if all frame have the given field"""
-        if how == "all":
-            func = all
-        else:
-            func = any
-        try:
-            return func(frame.get(field) is not None for frame in self.frames)
-        except KeyError:
-            return False
+        func = all if how == "all" else any
+        return func(frame.get(field) is not None for frame in self.frames)
 
     def iter_pixels(self, workers=None):
         """iterate the frames' pixel arrays
@@ -495,7 +496,8 @@ class DicomStack(object):
         for frame in self.frames:
             try:
                 values = [frame[field] for field in fields]
-            except KeyError:
+            except (KeyError, IndexError):
+                # missing field or index: skip (as frame.get)
                 continue
             if not all(v in m for v, m in zip(values, matchlist)):
                 continue
@@ -503,14 +505,8 @@ class DicomStack(object):
         return filtered
 
     def select(self, sel):
-        """return query Selector"""
-        if DicomTag.is_tag(sel):
-            return Selector(DicomTag(*sel))
-        return Selector(sel)
-
-    def _query(self, query: Query):
-        """return subset of frames based on query object"""
-        return [frame for frame in self.frames if query.execute(frame.get)]
+        """return query Selector (same as DICOM[sel])"""
+        return DICOM[sel]
 
     def _load_files(self, filenames, duplicates):
         """load filenames"""

@@ -10,6 +10,8 @@
 - Added: `DicomStack(dedup=)`: duplicate detection by `"uid"` or `"content"`.
 - Added: `MultipleValuesError` and `NoValueError` raised by `single()`.
 - Added: `isin()` alias of `is_in()` on selectors.
+- Added: selector methods `between()`, `isclose()` and `exists()`.
+- Added: `stack(query, strict=True)` raises comparison errors instead of warning.
 - Added: `as_volume(tol=, strict=)` to check slice spacing uniformity.
 
 ### Changed
@@ -18,6 +20,11 @@
 - Changed: file bytes are no longer kept in memory; fields are converted on access.
 - Changed: uncompressed pixel data is read directly, without parsing the file again.
 - Changed: warnings point to the calling code.
+- Changed: `regex()` matches anywhere in the value (`re.search`); use `^` to anchor.
+- Changed: queries are evaluated without `eval`.
+
+### Removed
+- Removed: `Query(expr, data)` string expressions (`Query(True)`/`Query(False)` remain).
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.
@@ -39,3 +46,6 @@
 - Fixed: `write_dataset` files lacked SOP UIDs and had invalid orientation.
 - Fixed: `format_pixels` ignored the geometry of volumes.
 - Fixed: `write_dataset` overwrote the geometry tags given by the caller.
+- Fixed: queries mixing equal-looking values (`1` and `"1"`) could overwrite each other.
+- Fixed: `copy`/`pickle` of selectors (special attributes became selectors).
+- Fixed: field filters raised `IndexError` on out-of-range indices (now skipped).
