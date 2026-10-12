@@ -11,50 +11,48 @@ from . import pixeldata
 
 LOGGER = logging.getLogger(__name__)
 
-# Fields to de-identify
+# Fields to de-identify (DICOM keywords)
 
+# type 2: emptied
 FIELDS_TYPE_2 = [
-    "Accession Number",
-    "Referring Physician's Name",
-    "Patient's Name",
-    "Patient ID",
-    "Patient's Birth Date",
-    "Patient's Sex",
+    "AccessionNumber",
+    "ReferringPhysicianName",
+    "PatientName",
+    "PatientID",
+    "PatientBirthDate",
+    "PatientSex",
 ]
 
+# type 3: removed
+# not removed: InstanceCreatorUID, SeriesDescription, RelatedFrameOfReferenceUID;
+# PhysiciansOfRecord, NameOfPhysiciansReadingStudy, OperatorsName: emptied as person names
 FIELDS_TYPE_3 = [
-    # "Instance Creator UID",
-    "Institution Name",
-    "Institution Address",
-    "Referring Physician's Address",
-    "Referring Physician's Telephone Numbers",
-    "Station Name",
-    "Study Description", # keep this?
-    # "Series Description", # keep this
-    "Institutional Department Name",
-    # "Physician(s) of Record", # removed as PN
-    "Performing Physicians' Name",
-    # "Name of Physician(s) Reading study", # removed as PN
-    # "Operator's Name", # removed as PN
-    "Admitting Diagnoses Description",
-    "Derivation Description",
-    "Patient's Birth Time",
-    "Other Patient IDs",
-    "Other Patient Names",
-    "Patient's Age",
-    "Patient's Size",
-    "Patient's Weight",
-    "Medical Record Locator",
-    "Ethnic Group",
+    "InstitutionName",
+    "InstitutionAddress",
+    "ReferringPhysicianAddress",
+    "ReferringPhysicianTelephoneNumbers",
+    "StationName",
+    "StudyDescription",
+    "InstitutionalDepartmentName",
+    "PerformingPhysicianName",
+    "AdmittingDiagnosesDescription",
+    "DerivationDescription",
+    "PatientBirthTime",
+    "OtherPatientIDs",
+    "OtherPatientNames",
+    "PatientAge",
+    "PatientSize",
+    "PatientWeight",
+    "MedicalRecordLocator",
+    "EthnicGroup",
     "Occupation",
-    "Additional Patient's History",
-    "Patient Comments",
-    "Device Serial Number",
-    "Protocol Name",
-    "Image Comments",
-    "Request Attributes Sequence",
-    "Storage Media File-Set UID",
-    # "Related Frame of Reference UID",
+    "AdditionalPatientHistory",
+    "PatientComments",
+    "DeviceSerialNumber",
+    "ProtocolName",
+    "ImageComments",
+    "RequestAttributesSequence",
+    "StorageMediaFileSetUID",
 ]
 
 
@@ -76,29 +74,21 @@ def tame_field(name):
 
 def export_stack(src, dest, prefix=None, **kwargs):
     """export/anonymize a whole dicom stack"""
-    outfile = None
     src = pathlib.Path(src)
     dest = pathlib.Path(dest)
     subset = kwargs.pop('subset', None)
     if not subset:
         subset = ['.']
 
-    def walk(path):
-        for _path in path.glob('*'):
-            if _path.is_dir():
-                yield from walk(_path)
-            else:
-                yield _path
-
     exported = {}
     errors = set()
     for subdir in subset:
         if subdir != '.':
             LOGGER.info(f"Searching subfolder: {subdir}'")
-        for infile in walk(src / subdir):
+        for infile in (path for path in (src / subdir).rglob("*") if not path.is_dir()):
             strpath = str(infile.resolve())
             if len(strpath) > 256 and not infile.is_file():
-                warnings.warn(f'Found filepath longer that 256 char, skipping.')
+                warnings.warn("Found filepath longer than 256 char, skipping.")
                 continue
             elif not pydicom.misc.is_dicom(infile):
                 continue
@@ -171,11 +161,9 @@ def export_file(
         try:
             dataset[mapkey]
         except KeyError:
-            # if not mapkey in dataset:
             raise MappingTableError(f"Unkown tag: {mapkey}")
         id = str(dataset.data_element(mapkey).value)
         if not id in mapper:
-            # raise
             raise MappingTableError(f"Missing index: '{id}' in mapping table.")
         # use custom mapper
         mapper = mapper.get(id, {})
@@ -194,21 +182,18 @@ def export_file(
 
     if anonymize:
         # Data elements of type 3 (optional) can be easily deleted using ``del``
-        for element_name in FIELDS_TYPE_3:
-            tag = tame_field(element_name)
-            if tag in dataset:
-                LOGGER.debug(f"Remove type-3 field: {element_name}")
-                delattr(dataset, tag)
+        for keyword in FIELDS_TYPE_3:
+            if keyword in dataset:
+                LOGGER.debug(f"Remove type-3 field: {keyword}")
+                delattr(dataset, keyword)
 
         # For data elements of type 2, assign a blank string.
-        for element_name in FIELDS_TYPE_2:
-            tag = tame_field(element_name)
-            LOGGER.debug(f"Erase type-2 field: {element_name}")
+        for keyword in FIELDS_TYPE_2:
+            LOGGER.debug(f"Erase type-2 field: {keyword}")
             try:
-                dataset.data_element(tag).value = ""
+                dataset.data_element(keyword).value = ""
             except KeyError:
-                LOGGER.debug(f"Could not find field: {element_name}, skipping.")
-                pass
+                LOGGER.debug(f"Could not find field: {keyword}, skipping.")
 
         #  callback functions to find all tags corresponding to a person name
         def person_names_callback(dataset, data_element):
@@ -389,15 +374,12 @@ def make_dataset(data, dtype="uint16", **tags):
         if isinstance(value, pydicom.DataElement):
             element = value
         else:
-            tag = pydicom.dataset.tag_for_keyword(name)
+            tag = pydicom.datadict.tag_for_keyword(name)
             if not tag:
                 raise ValueError("Invalid DICOM keyword: %s" % name)
-            vr = pydicom.dataset.dictionary_VR(tag)
+            vr = pydicom.datadict.dictionary_VR(tag)
             element = pydicom.DataElement(tag, vr, value)
         dataset.add(element)
-
-    # # Set the transfer syntax
-    # dataset.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
 
     # Set creation date/time
     dataset.ContentDate = now.strftime("%Y%m%d")

@@ -22,9 +22,12 @@
 - Changed: warnings point to the calling code.
 - Changed: `regex()` matches anywhere in the value (`re.search`); use `^` to anchor.
 - Changed: queries are evaluated without `eval`.
+- Changed: `utils.FIELDS_TYPE_2`/`FIELDS_TYPE_3` list DICOM keywords.
+- Changed: the CLI exits with code 1 on errors; program name `dicomstack`.
 
 ### Removed
 - Removed: `Query(expr, data)` string expressions (`Query(True)`/`Query(False)` remain).
+- Removed: `parse_dataset()` (use `DicomDataset.from_dataset()`).
 - Changed: `as_volume` warns on missing or irregular slices.
 - Changed: `describe()` keys colliding StudyIDs as "1", "1-2", ...
 - Changed: `write_dataset` writes Explicit VR Little Endian with unique UIDs.

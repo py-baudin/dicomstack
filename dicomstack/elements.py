@@ -93,8 +93,8 @@ class DicomElement:
         self.keyword = keyword
 
     @classmethod
-    def from_element(cls, element):
-        keyword = element_keyword(element)
+    def from_element(cls, element, keyword=None):
+        keyword = element_keyword(element) if keyword is None else keyword
         return cls(
             str(element.name),
             DicomTag(element.tag.group, element.tag.element),
@@ -141,7 +141,6 @@ class DicomElement:
 
         # else, if sequence, show sub elements
         for i, dataset in enumerate(self.value):
-            # repr += f"\n{indent * (level + 1)}{'-' * 120}\n"
             repr += f"\n{indent * level}[{i}]\n"
             for element in dataset.elements:
                 repr += element.represent(level + 1, indent=indent)
@@ -166,8 +165,9 @@ class DicomDataset:
 
     @classmethod
     def from_dataset(cls, dataset, index=None):
-        elements = parse_dataset(dataset, index)
-        return cls(elements)
+        """convert all elements of a pydicom dataset (frame `index` of multi-frame files)"""
+        elements = FileLookup(dataset).iter_elements(index)
+        return cls([DicomElement.from_element(element, keyword) for element, keyword in elements])
 
     def __repr__(self):
         # TODO: add nesting indentation
@@ -212,35 +212,6 @@ class DicomDataset:
         return element
 
 
-def parse_dataset(dataset, index=None, flatten=False):
-    """parse dataset to retrieve elements"""
-    elements = []
-    for element in itertools.chain(getattr(dataset, "file_meta", []), dataset):
-
-        if element.keyword == "PixelData":
-            # skip pixel data
-            continue
-
-        elif element.keyword == "PerFrameFunctionalGroupsSequence":
-            # multi-frame DICOM: flatten sub-dataset
-            elements.extend(parse_dataset(element[index], flatten=True))
-
-        elif element.keyword == "SharedFunctionalGroupsSequence":
-            # multi-frame DICOM: flatten sub-dataset
-            for _dataset in element:
-                elements.extend(parse_dataset(_dataset, flatten=True))
-
-        elif flatten and element.VR == "SQ":
-            # flatten sequences
-            for _dataset in element:
-                elements.extend(parse_dataset(_dataset, flatten=True))
-
-        else:
-            # normal element: append to elements
-            elements.append(DicomElement.from_element(element))
-
-    # make dataset
-    return elements
 
 
 def parse_element_value(value, VR):
@@ -252,7 +223,7 @@ def parse_element_value(value, VR):
     elif VR == "SQ":
         return [DicomDataset.from_dataset(dataset) for dataset in value]
 
-    elif VR in ["UI", "SH", "LT", "PN", "UT"]:  # , "OW"]:
+    elif VR in ["UI", "SH", "LT", "PN", "UT"]:
         return str(value)
 
     elif isinstance(value, (pydicom.multival.MultiValue, list, tuple)):
@@ -474,54 +445,59 @@ class FileLookup:
             return [self._shared_index]
         return [self._per_frame_index[index], self._shared_index]
 
-    def frame_elements(self, index=None):
-        """all elements of frame `index`: {tag (int): element}, {keyword: tag}
+    def iter_elements(self, index=None, raw=False):
+        """elements of frame `index` in order, as (element, keyword) (keyword: "" if none)
 
-        Same precedence as `get` (and as DicomDataset.from_dataset(header, index)):
-        file meta, then top-level elements in tag order with the functional groups
-        flattened in place, the last occurrence winning.
-        Top-level public elements are returned unconverted (pydicom RawDataElement)
-        when not converted yet.
+        Order (the precedence rule: the last occurrence wins): file meta, then
+        top-level elements in tag order with the functional groups flattened in place
+        (shared groups, then per-frame group `index`); pixel data skipped.
+        raw: top-level public elements are not converted (pydicom RawDataElement
+            if not converted yet)
         """
-        by_tag, by_keyword = {}, {}
-
-        def add(element, keyword=None):
-            tag = int(element.tag)
-            by_tag[tag] = element
-            keyword = element_keyword(element) if keyword is None else keyword
-            if keyword:
-                by_keyword[keyword] = tag
-
         meta = self.top.meta
         for tag in sorted(meta.keys()) if meta is not None else []:
-            add(meta[tag])
+            element = meta[tag]
+            yield element, element_keyword(element)
         if self.multiframe:
             shared, per_frame = self._flattened_groups()
         for tag in sorted(self.header.keys()):
             if tag == PIXEL_DATA:
                 continue
             elif self.multiframe and tag == SHARED_GROUPS:
-                for element in shared:
-                    add(element)
+                items = shared
             elif self.multiframe and tag == PER_FRAME_GROUPS:
-                for element in per_frame[index] if index is not None and per_frame else []:
-                    add(element)
-            elif tag.is_private:
-                # the automatic keyword needs the converted element's name
-                add(self.header[tag])
-            else:
+                items = per_frame[index] if index is not None and per_frame else []
+            elif raw and not tag.is_private:
                 # as DataElement.keyword: dictionary keyword, "" for repeating groups
                 keyword = (
                     pydicom.datadict.dictionary_keyword(tag)
                     if pydicom.datadict.dictionary_has_tag(tag)
                     else ""
                 )
-                add(self.header.get_item(tag), keyword)
+                yield self.header.get_item(tag), keyword
+                continue
+            else:
+                # (private elements: the automatic keyword needs the converted element)
+                items = [self.header[tag]]
+            for element in items:
+                yield element, element_keyword(element)
+
+    def frame_elements(self, index=None):
+        """all elements of frame `index`: {tag (int): element}, {keyword: tag}
+
+        Last occurrence wins (see iter_elements); top-level public elements unconverted.
+        """
+        by_tag, by_keyword = {}, {}
+        for element, keyword in self.iter_elements(index, raw=True):
+            tag = int(element.tag)
+            by_tag[tag] = element
+            if keyword:
+                by_keyword[keyword] = tag
         return by_tag, by_keyword
 
 
 def flatten_elements(dataset):
-    """elements of dataset with nested sequences flattened (cf. parse_dataset(flatten=True))"""
+    """elements of dataset with nested sequences flattened (functional groups)"""
     for element in dataset:
         if element.keyword == "PixelData":
             continue

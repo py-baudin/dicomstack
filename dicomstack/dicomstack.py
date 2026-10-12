@@ -25,7 +25,6 @@ from .elements import (  # noqa: F401
     compile_keys,
     element_keyword,
     get_nframe,
-    parse_dataset,
     parse_element_value,
     parse_keys,
 )
@@ -144,12 +143,12 @@ class DicomStack(object):
     @property
     def filenames(self):
         """return list of dicom files"""
-        if not self.root:
-            return [frame.dicomfile.filename for frame in self.frames]
-        return [
-            os.path.relpath(frame.dicomfile.filename, self.root)
-            for frame in self.frames
-        ]
+        return [self._filename(frame) for frame in self.frames]
+
+    def _filename(self, frame):
+        """frame's filename, relative to root"""
+        filename = frame.dicomfile.filename
+        return os.path.relpath(filename, self.root) if self.root else filename
 
     @property
     def zipfiles(self):
@@ -163,9 +162,7 @@ class DicomStack(object):
         LOGGER.info("Make dicom tree")
 
         def _describe(frame):
-            filename = frame.dicomfile.filename
-            if self.root:
-                filename = os.path.relpath(filename, self.root)
+            filename = self._filename(frame)
             return {
                 # UID and number
                 "StudyInstanceUID": frame.get("StudyInstanceUID", "UNKNOWN"),
@@ -322,17 +319,13 @@ class DicomStack(object):
         default keys: use both uid and position for uniqueness
         """
         indices = set()
-        files = set()
         frames = []
         for frame in self.frames:
             index = tuple(frame[key] for key in keys)
-            if index in indices:  # and not frame.dicomfile in files:
+            if index in indices:
                 continue  # skip
-            elif not index in indices:
-                indices.add(index)
-                files.add(frame.dicomfile)
+            indices.add(index)
             frames.append(frame)
-            continue
 
         diff = len(self) - len(frames)
         if warn and diff > 0:
@@ -370,7 +363,6 @@ class DicomStack(object):
             return self
         # use ImagePositionPatient
         axis = self.getaxis()
-        # field = f"ImagePositionPatient_{axis + 1}"
         field = Selector("ImagePositionPatient")[axis]
         if len(self.unique(field)) == len(self):
             return self.sort(field)

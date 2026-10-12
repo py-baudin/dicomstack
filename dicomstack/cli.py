@@ -2,6 +2,7 @@
 
 # coding=utf-8
 import os
+import sys
 import csv
 import json
 import logging
@@ -14,7 +15,7 @@ def cli():
     """Entry point into command-line utility"""
 
     # make parser
-    parser = argparse.ArgumentParser("dicom", description="Various DICOM utilities.")
+    parser = argparse.ArgumentParser("dicomstack", description="Various DICOM utilities.")
 
     # add subprograms
     subparser = parser.add_subparsers()
@@ -29,7 +30,7 @@ def cli():
     if "func" in args:
         args.func(args)
     else:
-        print(parser.print_help())
+        parser.print_help()
 
 
 def cli_view(subparser):
@@ -54,14 +55,7 @@ def cli_view(subparser):
     )
 
     def _elements(args):
-        # load stack
-        stack = dicomstack.DicomStack(args.src, cache=args.cache or None)
-
-        if args.series:
-            # filter by series
-            stack = stack(SeriesNumber=args.series)
-        if args.filters:
-            stack = stack(**args.filters)
+        stack = load_stack(args)
 
         # show dicom elements
         frame = stack.frames[args.index - 1]
@@ -92,14 +86,7 @@ def cli_values(subparser):
     )
 
     def _values(args):
-        # load stack
-        stack = dicomstack.DicomStack(args.src, cache=args.cache or None)
-
-        if args.series:
-            # filter by series
-            stack = stack(SeriesNumber=args.series)
-        if args.filters:
-            stack = stack(**args.filters)
+        stack = load_stack(args)
 
         # show dicom elements
         for element in args.elements:
@@ -135,12 +122,12 @@ def cli_list(subparser):
 export_descr = """
 Examples:
     # Simply anonymize DICOM stacks
-    dicom export <source> <destination>
+    dicomstack export <source> <destination>
 
     # Using a mapping table to modify values:
     map.json:
         {"Patient ID": "some id", "Series Description": "some description"}
-    dicom export -t map.json <source> <destination>
+    dicomstack export -t map.json <source> <destination>
 
     # Using a mapping table to modify DICOM selectively, based on a DICOM element
     # Example, using the 'Patient ID' field as mapping key:
@@ -148,7 +135,7 @@ Examples:
             ; Patient ID; Patient's Name
         id1 ; new-id1   ; new-name1
         id2 ; new-id2   ; new-name2
-    dicom export -t map.json -k PatientID <source> <destination>
+    dicomstack export -t table.csv -k PatientID <source> <destination>
 
     # use option "--dont-anonymize" in combination with the above to keep
     # identification information
@@ -223,10 +210,9 @@ def cli_export(subparser):
             if maptable.endswith(".csv"):
                 if mapkey is None:
                     print("A mapping key must be provided along with the mapping table")
-                    exit()
+                    sys.exit(1)
                 with open(maptable, newline="") as csvfile:
                     csvtable = list(csv.reader(csvfile, dialect="excel", delimiter=";"))
-                    # maptable = reader.read()
                 # refactor
                 index = csvtable[0][1:]
                 maptable = {row[0]: dict(zip(index, row[1:])) for row in csvtable[1:]}
@@ -236,7 +222,7 @@ def cli_export(subparser):
                     maptable = json.load(jsonfile)
             else:
                 print(f"Unknown table format: {maptable}")
-                exit()
+                sys.exit(1)
 
         if subset:
             if os.path.isfile(subset):
@@ -263,7 +249,7 @@ def cli_export(subparser):
                 if ans == "y":
                     break
                 elif ans == "n":
-                    exit()
+                    sys.exit(0)
 
     
         if os.path.isfile(src):
@@ -275,11 +261,21 @@ def cli_export(subparser):
             files = utils.export_stack(src, dest, **opts)
         else:
             print(f"No such file/directory: {src}")
-            exit()
+            sys.exit(1)
 
         print(f"{len(files)} files were created in '{args.dest}'")
 
     parser_export.set_defaults(func=_export)
+
+
+def load_stack(args):
+    """load the stack of args.src, filtered by --series and --filters"""
+    stack = dicomstack.DicomStack(args.src, cache=args.cache or None)
+    if args.series:
+        stack = stack(SeriesNumber=args.series)
+    if args.filters:
+        stack = stack(**args.filters)
+    return stack
 
 
 def dicom_filters(string):
@@ -292,7 +288,7 @@ def dicom_filters(string):
         except ValueError:
             try:
                 value = float(value)
-            except:
+            except ValueError:
                 pass
         filters[element] = value
     return filters

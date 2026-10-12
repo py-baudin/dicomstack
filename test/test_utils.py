@@ -46,6 +46,19 @@ def test_update_dataset(brain, tmpdir):
     assert np.all(ds.pixel_array == data)
 
 
+def test_anonymize_missing_type2_field(tmpdir, legsfile):
+    # a missing type-2 field (to empty) is skipped
+    ds = pydicom.dcmread(legsfile)
+    del ds.AccessionNumber
+    src = str(tmpdir.join("src.dcm"))
+    ds.save_as(src)
+    dest = utils.export_file(src, tmpdir / "out" / "out.dcm")
+    out = pydicom.dcmread(str(dest))
+    assert "AccessionNumber" not in out
+    assert out.PatientName == ""
+    assert "InstitutionName" not in out
+
+
 def test_anonymize_file(tmpdir, legsfile):
     path = legsfile
 
