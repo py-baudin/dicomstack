@@ -65,6 +65,16 @@ class MappingTableError(Exception):
 # uid generator
 generate_uid = pydicom.uid.generate_uid
 
+PYDICOM_MAJOR = int(pydicom.__version__.split(".")[0])
+
+
+def save_as(dataset, filename, enforce_file_format=False):
+    """Dataset.save_as for pydicom 2.x and 3.x"""
+    if PYDICOM_MAJOR >= 3:
+        dataset.save_as(filename, enforce_file_format=enforce_file_format)
+    else:
+        dataset.save_as(filename, write_like_original=not enforce_file_format)
+
 
 def tame_field(name):
     """tame DICOM field"""
@@ -273,8 +283,7 @@ def write_dataset(
         LOGGER.debug("Setting file extension to: %s", ext)
         basename = os.path.splitext(filename)[0]
         filename = basename + ext
-    # dataset.save_as(filename, write_like_original=False)
-    dataset.save_as(filename, enforce_file_format=False)
+    save_as(dataset, filename, enforce_file_format=False)
 
 
 def update_dataset(dataset, data=None, dtype="uint16", **tags):
