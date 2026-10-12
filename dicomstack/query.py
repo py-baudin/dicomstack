@@ -1,22 +1,21 @@
 """ class for making queries
 
 # usage
-stack.query(Selector("SeriesNumber").equals(301))
-stack.query(Selector("ImageType")[0].equals("M"))
+stack(Selector("SeriesNumber") == 301)
+stack(Selector("ImageType")[0] == "M")
+stack(DICOM.SeriesNumber.is_in([301, 401]))
 
 # shortcuts
 stack(stack.SeriesNumber == 301)
 stack(stack.ImageType[0] == "M")
 stack(stack.Field.Subfield == "value")
 
-stack("SeriesNumber == 301")
-stack("SeriesNumber[0] == 'M'")
-
 # operators:
 ==, !=, <, <=, >, >=
 
 # methods:
-.is_in(), .not_in(), is_null(), contains(), startswith(), endswith(), between(), regex(),
+.is_in() (alias: .isin()), .not_in(), .is_null(), .contains(), .intersect(), .subset(),
+.superset(), .startswith(), .endswith(), .regex() (re.match), .apply()
 
 # combine/modify queries with &, |, ~
 
@@ -75,6 +74,8 @@ class Selector:
     # methods
     def is_in(self, value: Any) -> "Query":
         return Query.from_selector(self, "is-in", value)
+
+    isin = is_in
 
     def not_in(self, value: Any) -> "Query":
         return Query.from_selector(self, "not-in", value)
@@ -226,10 +227,3 @@ class Query:
         if isinstance(self.expr, bool):
             return Query(not self.expr)
         return Query(f"not ({self.expr})", self.data)
-
-
-
-def my_warning(message, category, filename, lineno, file=None, line=None):
-    print(f'WARNING: {message}')
-
-warnings.showwarning = my_warning
